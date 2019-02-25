@@ -12,17 +12,23 @@
 /// SOFTWARE.
 ///
 
-#include <string>
-#include <optional>
 #include <vector>
-#include "FMacro.h"
+#include "Type/DVector3.h"
+#include "ASystemInclude.h"
 
-/// @brief Check file path is valid and file is exist on present filesystem. \n
-/// This function supports relative path.
-MCR_NODISCARD inline bool IsFileExist(const std::string& iFilePath);
+namespace sh
+{
 
-/// @brief Read file as binary mode and return chunk of file buffer.
-MCR_NODISCARD std::optional<std::vector<char>> ReadBinaryFile(const std::string& filePath);
+struct DDefaultVertex final
+{
+  DVector3 mPosition;
+  DVector3 mBaseColor;
+  
+  /// @brief Get overall vertex structure binding descriptor for Vulkan.
+  [[nodiscard]] static VkVertexInputBindingDescription& GetBindingDescription();
 
-/// @brief Get file name from path without file speicification (.exe, like)
-MCR_NODISCARD std::string GetFileNameFromPath(const std::string& path) noexcept;
+  /// @brief Get per attribute structure binding descriptor for Vulkan.
+  [[nodiscard]] static std::vector<VkVertexInputAttributeDescription>& GetAttributeDescriptons();;
+};
+
+} /// ::sh namespace

@@ -12,10 +12,9 @@
 /// SOFTWARE.
 ///
 
-#if defined(_WIN32) == true
-#include <Windows.h>
+#if defined(max)
+#undef max
 #endif
-
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-#include <vulkan/vulkan.h>
+#if defined(min)
+#undef min
+#endif

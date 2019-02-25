@@ -33,13 +33,16 @@ set(CUDA_VERBOSE_BUILD ON)
 set(CUDA_NVCC_FLAGS_DEBUG "-g -G")
 
 # Set cutomized flag.
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /W4 /WX /MP /EHc /std:c++17")
+# https://stackoverflow.com/questions/41205725/how-to-disable-specific-warning-inherited-from-parent-in-visual-studio?rq=1
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4201 /W4 /WX /MP /EHc /std:c++17")
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup")
 
 # Include library directories.
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}\\Include)
 include_directories(C:\\TPLibraries\\glfw-3.2.1\\include)
 include_directories(C:\\VulkanSDK\\1.1.85.0\\Include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}\\Library\\glm)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}\\Library\\fmt\\Include)
 
 # Include sub-projects.
 add_subdirectory (Source)

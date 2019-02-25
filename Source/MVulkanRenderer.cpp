@@ -20,6 +20,7 @@
 #include "FHelperVulkan.h"
 #include "FHelperFileIO.h"
 #include <set>
+#include "Temp/DDefaultVertex.h"
 
 namespace
 {
@@ -83,6 +84,16 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VkDebugCallback(
   return VK_FALSE;
 }
 
+const std::vector<sh::DDefaultVertex> sTempVertices = {
+    // Position,          // Color,
+    {{0.0f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, 0.5f,  0.0f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}}
+};
+
+VkBuffer sVertexBufferObject;
+VkDeviceMemory sVertexBufferMemory;
+
 } /// anonymouse namespace
 
 //!
@@ -142,18 +153,16 @@ EDySuccess MVulkanRenderer::pfInitialize()
   // Create swap chain. This function must be succeeded.
   this->CreateSwapChain();
   this->mSwapChainImages = this->GetSwapChainImageHandles(this->mSwapChain);
-
   // Create swap chain image views to view image handle list of swap chain.
   this->CreateSwapChainImageViews();
   // 
   this->CreateRenderPass();
-  //
   this->CreateGraphicsPipeline();
-  //
   this->CreateFrameBuffer();
   //
   this->CreateCommandPool();
   //
+  this->CreateVertexBuffer();
   this->CreateCommandBuffers();
   //
   this->CreateDefaultSemaphores();
@@ -986,13 +995,16 @@ void MVulkanRenderer::CreateFixedRenderPipeline(
   // * Attribute : type of the attributes passed to the vertex shader.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkPipelineVertexInputStateCreateInfo.html
   //
-  // We are using hard-coded vertexs.
+  // We now need to set up the graphics pipeline to accept vertex data in this format 
+  // by referencing the structures in createGraphicsPipeline. 
+  // Find the vertexInputInfo struct and modify it to reference the two descriptions:
   VkPipelineVertexInputStateCreateInfo vertexInputInfo = {};
   vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-  vertexInputInfo.vertexBindingDescriptionCount   = 0;
-  vertexInputInfo.pVertexBindingDescriptions      = nullptr;
-  vertexInputInfo.vertexAttributeDescriptionCount = 0;
-  vertexInputInfo.pVertexAttributeDescriptions    = nullptr;
+  // Like this.
+  vertexInputInfo.vertexBindingDescriptionCount   = 1;
+  vertexInputInfo.pVertexBindingDescriptions      = &sh::DDefaultVertex::GetBindingDescription();
+  vertexInputInfo.vertexAttributeDescriptionCount = TU32(sh::DDefaultVertex::GetAttributeDescriptons().size());
+  vertexInputInfo.pVertexAttributeDescriptions    = sh::DDefaultVertex::GetAttributeDescriptons().data();
 
   // (2) Input assembly
   // creatInfo structure describes two things.
@@ -1295,9 +1307,13 @@ void MVulkanRenderer::CreateCommandBuffers()
     // specifies binding as a graphic pipeline.
     vkCmdBindPipeline(this->mCommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, this->mPipeline);
 
+    std::vector<VkBuffer> vertexBuffers = {sVertexBufferObject};
+    std::vector<VkDeviceSize> offset = {0};
+    vkCmdBindVertexBuffers(this->mCommandBuffers[i], 0, 1, vertexBuffers.data(), offset.data());
+
     // Draw!! (glDrawArrays)
     // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCmdDraw.html
-    vkCmdDraw(this->mCommandBuffers[i], 3, 1, 0, 0);
+    vkCmdDraw(this->mCommandBuffers[i], static_cast<TU32>(sTempVertices.size()), 1, 0, 0);
 
     // Finish render pass. 
     vkCmdEndRenderPass(this->mCommandBuffers[i]);
@@ -1345,6 +1361,124 @@ void MVulkanRenderer::CreateDefaultSemaphores()
       throw std::runtime_error("Failed to create synchronization objects for a frame.");
     }
   }
+}
+
+void MVulkanRenderer::CreateVertexBuffer()
+{
+  // (1) Create buffer creation information.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkBufferCreateInfo.html
+  VkBufferCreateInfo bufferInfo = {};
+  bufferInfo.sType  = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bufferInfo.size   = sizeof(sTempVertices[0]) * sTempVertices.size();
+  // How to use this buffer.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkBufferUsageFlagBits.html
+  bufferInfo.usage  = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; // VBO in OpenGL?
+  // Access to any range or image subresouce of the object will be exclusive and not shared.
+  // Just like the images in the swap chain, buffers can also be owned by a specified queue (EXCLUSIVE)
+  // family or be shared between multiple at same time (CONCURRENT)
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkSharingMode.html
+  bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  
+  // Created VtBuffer must be destroyed explicitly.
+  // However, vkCreateBuffer does not allocate any memory space for it.
+  // So, after this user should fill `VkMemoryRequirements`.
+  // https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkCreateBuffer.html
+  if (vkCreateBuffer(this->mGraphicsDevice, &bufferInfo, nullptr, &sVertexBufferObject)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to create vertex buffer.");
+  }
+
+  // (2) Allocating memory for the buffer above is to query its memory requirements
+  // using name `vkGetBufferMemoryRequirements`...
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkGetBufferMemoryRequirements.html
+  VkMemoryRequirements memoryRequirements;
+  vkGetBufferMemoryRequirements(this->mGraphicsDevice, sVertexBufferObject, &memoryRequirements);
+
+  // Graphics cards can offer different types of memory to allocate from. (IMPORTANT)
+  // Independent to bufferInfo yet.
+  VkMemoryAllocateInfo allocateInfo = {};
+  allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocateInfo.allocationSize = memoryRequirements.size;
+  // To allocate buffer memory to GPU VRAM, we need VISIBLE_BIT and also COHERENT_BIT.
+  // COHERENT_BIT flag would be needed to synchronize and avoid indirect bidning to cache instead of
+  // direct VRAM memory space.
+  allocateInfo.memoryTypeIndex = FindMemoryTypes(
+      memoryRequirements.memoryTypeBits, 
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+  // Create a class member to store the handle to the VRAM memory and allocate it.
+  // https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkAllocateMemory.html
+  if (vkAllocateMemory(this->mGraphicsDevice, &allocateInfo, nullptr, &sVertexBufferMemory)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to allocate vertex buffer memory.");
+  }
+
+  // (3) If memory allocation is successful, finally associate this memory buffer with
+  // the buffer using `vkBindBufferMemory`.
+  // the fourth parameter is the offset within the region of memory. 
+  // If the offset is non-zero, then it is required to be divisible by `memRequirements.alignment`.
+  if (vkBindBufferMemory(this->mGraphicsDevice, sVertexBufferObject, sVertexBufferMemory, 0)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to bind buffer memory.");
+  }
+
+  // (4) Copy the vertex data to the VRAM buffer.
+  // This is done by mapping the buffer memory into CPU accessible memory `vkMapMemory`.
+  // So,... using `vkMapMemory`, VRAM buffer memory will be mapped into CPU memory to be accessible
+  // from CPU code.
+  void* data;
+  // `vkMapMemory` function allows us to access a region of the specified memory resource
+  // defined by an [s := sVertexBufferMemory + offset, s + bufferInfo.size). 
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkMapMemory.html
+  vkMapMemory(this->mGraphicsDevice, sVertexBufferMemory, 0, bufferInfo.size, 0, &data);
+
+  // Unfortunately the driver may not immediately copy the data into the buffer memory, 
+  // for example because of caching. 
+  // It is also possible that writes to the buffer are not visible in the mapped memory yet. 
+  // There are two ways to deal with that problem:
+  //
+  // 1. Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  // 2. Call vkFlushMappedMemoryRanges to after writing to the mapped memory, 
+  // and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkFlushMappedMemoryRanges.html
+  memcpy(data, sTempVertices.data(), static_cast<size_t>(bufferInfo.size));
+  vkUnmapMemory(this->mGraphicsDevice, sVertexBufferMemory);
+
+  // Flushing memory ranges or using a coherent memory heap means that 
+  // the driver will be aware of our writes to the buffer, 
+  // BUT IT DOESN'T MEAN THAT THEY ARE ACTUALLY VISIBLE ON THE GPU YET. 
+  // The transfer of data to the GPU is an operation that happens in the background 
+  // and the specification simply tells us that it is guaranteed to be complete 
+  // as of the next call to `vkQueueSubmit`.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkQueueSubmit.html
+}
+
+TU32 MVulkanRenderer::FindMemoryTypes(TU32 iTypeFilter, VkMemoryPropertyFlags iProperties)
+{
+  // First we need to query information about the available types of memory.
+  // We should note `memoryTypes` and `memoryHeaps`.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkPhysicalDeviceMemoryProperties.html
+  VkPhysicalDeviceMemoryProperties memoryProperties;
+  vkGetPhysicalDeviceMemoryProperties(this->mPhysicalDevice, &memoryProperties);
+
+  // `memoryHeaps` are VRAM or swap space of RAM when VRAM runs out.
+  // We should concern with the type of memory, not the heap itself.
+  for (TU32 i = 0; i < memoryProperties.memoryTypeCount; ++i)
+  {
+    // Equal to the desired proeprties bit field.
+    // If there is a memory type suitable for the buffer that also has all of their properties,
+    // return index i.
+    if (iTypeFilter & (1 << i)
+    &&  (memoryProperties.memoryTypes[i].propertyFlags & iProperties) == iProperties) 
+    {
+      return i;
+    }
+  }
+
+  throw std::runtime_error("Failed to find suitable memory type.");
 }
 
 void MVulkanRenderer::RecreateSwapChain()
@@ -1409,6 +1543,9 @@ void MVulkanRenderer::CleanUp()
   // To synchronize drawFrame functions, this function must be called.
   vkDeviceWaitIdle(this->mGraphicsDevice);
   this->CleanupSwapChain();
+
+  vkFreeMemory(this->mGraphicsDevice, sVertexBufferMemory, nullptr);
+  vkDestroyBuffer(this->mGraphicsDevice, sVertexBufferObject, nullptr);
 
   for (auto& fence : this->mFencesInFlight)
   {

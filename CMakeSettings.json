@@ -22,7 +22,7 @@
       ],
       "buildRoot": "${projectDir}\\build\\${name}",
       "installRoot": "${projectDir}\\install\\${name}",
-      "cmakeCommandArgs": " /W4 /WX /MP /EHc /std:c++17",
+      "cmakeCommandArgs": "/W4 /WX /MP /EHc /std:c++17",
       "buildCommandArgs": "-v -j 14",
       "ctestCommandArgs": ""
     }

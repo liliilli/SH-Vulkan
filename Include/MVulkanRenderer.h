@@ -196,6 +196,21 @@ private:
   /// Created semaphores must be destroyed explicitly.
   void CreateDefaultSemaphores();
 
+  /// @brief Create vertex buffers. 
+  ///
+  /// Buffers in Vulkan (not builtin) are storing arbitary (important!) data that can be
+  /// interpreted by the graphics card and descriptor specification freedomly.
+  /// They can be used store vertex data, but they can also be used for many other purpose.
+  /// But, unlike builtin buffer, customized buffer do not automatically allocate memory themselves.
+  void CreateVertexBuffer();
+  /// @brief Get preferred physical devices that on now valid memory type.
+  /// iTypeFilter this will be used to specify the bit field of memory types that are suitable.
+  ///
+  /// But, not only preferred memory type and but also preferred memory type also supports
+  /// mapping buffer from CPU to GPU and such as special features.
+  /// For example, Mapping buffer data from CPU to GPU is specified as VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT.
+  MCR_NODISCARD TU32 FindMemoryTypes(TU32 iTypeFilter, VkMemoryPropertyFlags iProperties);
+
   /// @brief Recreate swap chain when window property was changed.
   /// Created swap chain is no longer compatible with it because 
   void RecreateSwapChain();

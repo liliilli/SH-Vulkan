@@ -11,10 +11,4 @@
 # SOFTWARE.
 #
 cmake_minimum_required (VERSION 3.8)
-
-# Include sub-projects.
-add_subdirectory (Temp)
-
-file(GLOB NEU_SOURCE_FILES *.cpp)
-add_library(Source STATIC ${NEU_SOURCE_FILES})
-target_link_libraries(Source Source_Temp)
+add_library(Source_Temp STATIC DDefaultVertex.cpp)
