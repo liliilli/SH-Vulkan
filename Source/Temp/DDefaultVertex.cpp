@@ -13,7 +13,7 @@
 
 #include "Temp/DDefaultVertex.h"
 
-namespace sh
+namespace dy
 {
 
 VkVertexInputBindingDescription& DDefaultVertex::GetBindingDescription()
@@ -59,4 +59,4 @@ std::vector<VkVertexInputAttributeDescription>& DDefaultVertex::GetAttributeDesc
   return attributeDescription;
 }
 
-} /// ::sh namespace
+} /// ::dy namespace

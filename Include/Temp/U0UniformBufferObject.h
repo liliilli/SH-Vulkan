@@ -12,23 +12,18 @@
 /// SOFTWARE.
 ///
 
-#include <vector>
-#include "Type/DVector3.h"
-#include "ASystemInclude.h"
+#include "Type/DMatrix4.h"
 
 namespace dy
 {
 
-struct DDefaultVertex final
+/// The specification.
+/// https://www.khronos.org/registry/vulkan/specs/1.1-extensions/html/chap14.html#interfaces-resources-layout
+struct UUniformBufferObject final
 {
-  DVector3 mPosition;
-  DVector3 mBaseColor;
-  
-  /// @brief Get overall vertex structure binding descriptor for Vulkan.
-  [[nodiscard]] static VkVertexInputBindingDescription& GetBindingDescription();
-
-  /// @brief Get per attribute structure binding descriptor for Vulkan.
-  [[nodiscard]] static std::vector<VkVertexInputAttributeDescription>& GetAttributeDescriptons();;
+	alignas(16) DMatrix4 uModel;
+	alignas(16) DMatrix4 uView;
+	alignas(16) DMatrix4 uProj;
 };
 
 } /// ::dy namespace
