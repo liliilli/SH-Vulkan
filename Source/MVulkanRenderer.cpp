@@ -14,12 +14,12 @@
 #include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
+#include <set>
 
 #include "ESuccess.h"
 #include "MVulkanRenderer.h"
 #include "FHelperVulkan.h"
 #include "FHelperFileIO.h"
-#include <set>
 #include "Temp/DDefaultVertex.h"
 
 namespace
@@ -86,13 +86,22 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VkDebugCallback(
 
 const std::vector<sh::DDefaultVertex> sTempVertices = {
     // Position,          // Color,
-    {{0.0f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
     {{0.5f, 0.5f,  0.0f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}}
+    {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 1.0f}}
 };
 
-VkBuffer sVertexBufferObject;
-VkDeviceMemory sVertexBufferMemory;
+const std::vector<TU32> sTempIndices = {
+  0, 1, 2, 
+  2, 3, 0
+};
+
+VkBuffer        sVertexBufferObject;
+VkDeviceMemory  sVertexBufferMemory;
+
+VkBuffer        sVertexElementObject;
+VkDeviceMemory  sVertexElementMemory;
 
 } /// anonymouse namespace
 
@@ -163,6 +172,7 @@ EDySuccess MVulkanRenderer::pfInitialize()
   this->CreateCommandPool();
   //
   this->CreateVertexBuffer();
+  this->CreateIndiceBuffer();
   this->CreateCommandBuffers();
   //
   this->CreateDefaultSemaphores();
@@ -484,6 +494,8 @@ DVkQueueFamilyIndices MVulkanRenderer::GetFindQueueFamilies(
   for (TU32 i = 0; i < queueFamilyCount; ++i)
   {
     // Check there is graphic queue in index [i] of given graphics queue of physical device..
+    // * VK_QUEUE_TRANSFER_BIT is implicitly supported by VK_QUEUE_GRAPHICS_BIT & VK_QUEUE_COMPUTE_BIT.
+    // VK_QUEUE_TRANSFER_BIT is needed to copy & move data from buffer to another buffer.
     const auto& queueFamilyProperty = queueFamilyProperties[i];
     if (queueFamilyProperty.queueCount > 0
     &&  queueFamilyProperty.queueFlags & iQueueFlagBits)
@@ -491,10 +503,9 @@ DVkQueueFamilyIndices MVulkanRenderer::GetFindQueueFamilies(
       indices.moptGraphicsQueueFamiliy = i;
     }
 
+    // Check there is present queue in index[i] of given graphics queue of physical device..
     VkBool32 presentSupport = false;
     vkGetPhysicalDeviceSurfaceSupportKHR(iPhysicalDevice, i, this->mSurface, &presentSupport);
-
-    // Check there is present queue in index[i] of given graphics queue of physical device..
     if (queueFamilyProperty.queueCount > 0 && VkIsTrue(presentSupport))
     {
       indices.moptPresentQueueFamily = i;
@@ -1311,9 +1322,14 @@ void MVulkanRenderer::CreateCommandBuffers()
     std::vector<VkDeviceSize> offset = {0};
     vkCmdBindVertexBuffers(this->mCommandBuffers[i], 0, 1, vertexBuffers.data(), offset.data());
 
+    std::vector<VkBuffer> indexBuffers = {sVertexElementObject};
+    vkCmdBindIndexBuffer(this->mCommandBuffers[i], sVertexElementObject, 0, VK_INDEX_TYPE_UINT32);
+
     // Draw!! (glDrawArrays)
     // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCmdDraw.html
-    vkCmdDraw(this->mCommandBuffers[i], static_cast<TU32>(sTempVertices.size()), 1, 0, 0);
+    //vkCmdDraw(this->mCommandBuffers[i], static_cast<TU32>(sTempVertices.size()), 1, 0, 0);
+
+    vkCmdDrawIndexed(this->mCommandBuffers[i], static_cast<TU32>(sTempIndices.size()), 1, 0, 0, 0);
 
     // Finish render pass. 
     vkCmdEndRenderPass(this->mCommandBuffers[i]);
@@ -1365,65 +1381,20 @@ void MVulkanRenderer::CreateDefaultSemaphores()
 
 void MVulkanRenderer::CreateVertexBuffer()
 {
-  // (1) Create buffer creation information.
-  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkBufferCreateInfo.html
-  VkBufferCreateInfo bufferInfo = {};
-  bufferInfo.sType  = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  bufferInfo.size   = sizeof(sTempVertices[0]) * sTempVertices.size();
-  // How to use this buffer.
-  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkBufferUsageFlagBits.html
-  bufferInfo.usage  = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT; // VBO in OpenGL?
-  // Access to any range or image subresouce of the object will be exclusive and not shared.
-  // Just like the images in the swap chain, buffers can also be owned by a specified queue (EXCLUSIVE)
-  // family or be shared between multiple at same time (CONCURRENT)
-  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkSharingMode.html
-  bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-  
-  // Created VtBuffer must be destroyed explicitly.
-  // However, vkCreateBuffer does not allocate any memory space for it.
-  // So, after this user should fill `VkMemoryRequirements`.
-  // https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkCreateBuffer.html
-  if (vkCreateBuffer(this->mGraphicsDevice, &bufferInfo, nullptr, &sVertexBufferObject)
-      != VK_SUCCESS)
-  {
-    throw std::runtime_error("Failed to create vertex buffer.");
-  }
+  const VkDeviceSize bufferSize = sizeof(sTempVertices[0]) * sTempVertices.size();
 
-  // (2) Allocating memory for the buffer above is to query its memory requirements
-  // using name `vkGetBufferMemoryRequirements`...
-  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkGetBufferMemoryRequirements.html
-  VkMemoryRequirements memoryRequirements;
-  vkGetBufferMemoryRequirements(this->mGraphicsDevice, sVertexBufferObject, &memoryRequirements);
-
-  // Graphics cards can offer different types of memory to allocate from. (IMPORTANT)
-  // Independent to bufferInfo yet.
-  VkMemoryAllocateInfo allocateInfo = {};
-  allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  allocateInfo.allocationSize = memoryRequirements.size;
-  // To allocate buffer memory to GPU VRAM, we need VISIBLE_BIT and also COHERENT_BIT.
-  // COHERENT_BIT flag would be needed to synchronize and avoid indirect bidning to cache instead of
-  // direct VRAM memory space.
-  allocateInfo.memoryTypeIndex = FindMemoryTypes(
-      memoryRequirements.memoryTypeBits, 
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-
-  // Create a class member to store the handle to the VRAM memory and allocate it.
-  // https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkAllocateMemory.html
-  if (vkAllocateMemory(this->mGraphicsDevice, &allocateInfo, nullptr, &sVertexBufferMemory)
-      != VK_SUCCESS)
-  {
-    throw std::runtime_error("Failed to allocate vertex buffer memory.");
-  }
-
-  // (3) If memory allocation is successful, finally associate this memory buffer with
-  // the buffer using `vkBindBufferMemory`.
-  // the fourth parameter is the offset within the region of memory. 
-  // If the offset is non-zero, then it is required to be divisible by `memRequirements.alignment`.
-  if (vkBindBufferMemory(this->mGraphicsDevice, sVertexBufferObject, sVertexBufferMemory, 0)
-      != VK_SUCCESS)
-  {
-    throw std::runtime_error("Failed to bind buffer memory.");
-  }
+  // (0) We're now going to use a host visible buffer (CPU) as temporary buffer to transfer buffer data
+  // into Client buffer that only visible in GPU so as actual vertex buffer.
+  // HOST VISIBLE BUFFER is called to Staging buffer.
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
+  // VK_BUFFER_USAGE_TRANSFER_SRC_BIT specifies buffer can be used as the source of a transfer command,
+  // so, stagingBuffer can be source buffer that can be moved to other buffer.
+  this->CreateBuffer(bufferSize, 
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      stagingBuffer,
+      stagingBufferMemory);
 
   // (4) Copy the vertex data to the VRAM buffer.
   // This is done by mapping the buffer memory into CPU accessible memory `vkMapMemory`.
@@ -1433,7 +1404,7 @@ void MVulkanRenderer::CreateVertexBuffer()
   // `vkMapMemory` function allows us to access a region of the specified memory resource
   // defined by an [s := sVertexBufferMemory + offset, s + bufferInfo.size). 
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkMapMemory.html
-  vkMapMemory(this->mGraphicsDevice, sVertexBufferMemory, 0, bufferInfo.size, 0, &data);
+  vkMapMemory(this->mGraphicsDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
 
   // Unfortunately the driver may not immediately copy the data into the buffer memory, 
   // for example because of caching. 
@@ -1444,8 +1415,8 @@ void MVulkanRenderer::CreateVertexBuffer()
   // 2. Call vkFlushMappedMemoryRanges to after writing to the mapped memory, 
   // and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkFlushMappedMemoryRanges.html
-  memcpy(data, sTempVertices.data(), static_cast<size_t>(bufferInfo.size));
-  vkUnmapMemory(this->mGraphicsDevice, sVertexBufferMemory);
+  memcpy(data, sTempVertices.data(), static_cast<size_t>(bufferSize));
+  vkUnmapMemory(this->mGraphicsDevice, stagingBufferMemory);
 
   // Flushing memory ranges or using a coherent memory heap means that 
   // the driver will be aware of our writes to the buffer, 
@@ -1454,6 +1425,82 @@ void MVulkanRenderer::CreateVertexBuffer()
   // and the specification simply tells us that it is guaranteed to be complete 
   // as of the next call to `vkQueueSubmit`.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkQueueSubmit.html
+
+  this->CreateBuffer(
+    bufferSize,
+    // VBO in OpenGL but transferred from SRC_BIT buffer.
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,     
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,  // Local buffer of VRAM we can not use vkMapMemory to LOCAL_BIT.
+    sVertexBufferObject,
+    sVertexBufferMemory
+  );
+
+  // We can copy data from the stagingBuffer to the vertexBuffer (sVertexBufferObject).
+  this->CopyBuffer(stagingBuffer, bufferSize, sVertexBufferObject);
+  vkFreeMemory(this->mGraphicsDevice, stagingBufferMemory, nullptr);
+  vkDestroyBuffer(this->mGraphicsDevice, stagingBuffer, nullptr);
+}
+
+void MVulkanRenderer::CreateIndiceBuffer()
+{
+  const VkDeviceSize bufferSize = sizeof(sTempIndices[0]) * sTempIndices.size();
+
+  // (0) We're now going to use a host visible buffer (CPU) as temporary buffer to transfer buffer data
+  // into Client buffer that only visible in GPU so as actual vertex buffer.
+  // HOST VISIBLE BUFFER is called to Staging buffer.
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
+  // VK_BUFFER_USAGE_TRANSFER_SRC_BIT specifies buffer can be used as the source of a transfer command,
+  // so, stagingBuffer can be source buffer that can be moved to other buffer.
+  this->CreateBuffer(bufferSize, 
+      VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+      stagingBuffer,
+      stagingBufferMemory);
+
+  // (4) Copy the vertex data to the VRAM buffer.
+  // This is done by mapping the buffer memory into CPU accessible memory `vkMapMemory`.
+  // So,... using `vkMapMemory`, VRAM buffer memory will be mapped into CPU memory to be accessible
+  // from CPU code.
+  void* data;
+  // `vkMapMemory` function allows us to access a region of the specified memory resource
+  // defined by an [s := sVertexBufferMemory + offset, s + bufferInfo.size). 
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkMapMemory.html
+  vkMapMemory(this->mGraphicsDevice, stagingBufferMemory, 0, bufferSize, 0, &data);
+
+  // Unfortunately the driver may not immediately copy the data into the buffer memory, 
+  // for example because of caching. 
+  // It is also possible that writes to the buffer are not visible in the mapped memory yet. 
+  // There are two ways to deal with that problem:
+  //
+  // 1. Use a memory heap that is host coherent, indicated with VK_MEMORY_PROPERTY_HOST_COHERENT_BIT
+  // 2. Call vkFlushMappedMemoryRanges to after writing to the mapped memory, 
+  // and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkFlushMappedMemoryRanges.html
+  memcpy(data, sTempIndices.data(), static_cast<size_t>(bufferSize));
+  vkUnmapMemory(this->mGraphicsDevice, stagingBufferMemory);
+
+  // Flushing memory ranges or using a coherent memory heap means that 
+  // the driver will be aware of our writes to the buffer, 
+  // BUT IT DOESN'T MEAN THAT THEY ARE ACTUALLY VISIBLE ON THE GPU YET. 
+  // The transfer of data to the GPU is an operation that happens in the background 
+  // and the specification simply tells us that it is guaranteed to be complete 
+  // as of the next call to `vkQueueSubmit`.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkQueueSubmit.html
+
+  this->CreateBuffer(
+    bufferSize,
+    // VBO in OpenGL but transferred from SRC_BIT buffer.
+    VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT,     
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,  // Local buffer of VRAM we can not use vkMapMemory to LOCAL_BIT.
+    sVertexElementObject,
+    sVertexElementMemory
+  );
+
+  // We can copy data from the stagingBuffer to the vertexBuffer (sVertexBufferObject).
+  this->CopyBuffer(stagingBuffer, bufferSize, sVertexElementObject);
+  vkFreeMemory(this->mGraphicsDevice, stagingBufferMemory, nullptr);
+  vkDestroyBuffer(this->mGraphicsDevice, stagingBuffer, nullptr);
 }
 
 TU32 MVulkanRenderer::FindMemoryTypes(TU32 iTypeFilter, VkMemoryPropertyFlags iProperties)
@@ -1479,6 +1526,123 @@ TU32 MVulkanRenderer::FindMemoryTypes(TU32 iTypeFilter, VkMemoryPropertyFlags iP
   }
 
   throw std::runtime_error("Failed to find suitable memory type.");
+}
+
+void MVulkanRenderer::CreateBuffer(
+    VkDeviceSize iSize, VkBufferUsageFlags iUsage,
+    VkMemoryAllocateFlags iMemoryAllocationFlags, 
+    VkBuffer& outBuffer, VkDeviceMemory& outBufferMemory)
+{
+  // (1) Create buffer creation information.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkBufferCreateInfo.html
+  VkBufferCreateInfo bufferInfo = {};
+  bufferInfo.sType  = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  bufferInfo.size   = iSize;
+  // How to use this buffer.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkBufferUsageFlagBits.html
+  bufferInfo.usage  = iUsage;
+  // Access to any range or image subresouce of the object will be exclusive and not shared.
+  // Just like the images in the swap chain, buffers can also be owned by a specified queue (EXCLUSIVE)
+  // family or be shared between multiple at same time (CONCURRENT)
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkSharingMode.html
+  bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  
+  // Created VtBuffer must be destroyed explicitly.
+  // However, vkCreateBuffer does not allocate any memory space for it.
+  // So, after this user should fill `VkMemoryRequirements`.
+  // https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkCreateBuffer.html
+  if (vkCreateBuffer(this->mGraphicsDevice, &bufferInfo, nullptr, &outBuffer)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to create vertex buffer.");
+  }
+
+  // (2) Allocating memory for the buffer above is to query its memory requirements
+  // using name `vkGetBufferMemoryRequirements`...
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkGetBufferMemoryRequirements.html
+  VkMemoryRequirements memoryRequirements;
+  vkGetBufferMemoryRequirements(this->mGraphicsDevice, outBuffer, &memoryRequirements);
+
+  // Graphics cards can offer different types of memory to allocate from. (IMPORTANT)
+  // Independent to bufferInfo yet.
+  VkMemoryAllocateInfo allocateInfo = {};
+  allocateInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocateInfo.allocationSize = memoryRequirements.size;
+  // To allocate buffer memory to GPU VRAM, we need VISIBLE_BIT and also COHERENT_BIT.
+  // COHERENT_BIT flag would be needed to synchronize and avoid indirect bidning to cache instead of
+  // direct VRAM memory space.
+  allocateInfo.memoryTypeIndex = FindMemoryTypes(memoryRequirements.memoryTypeBits, iMemoryAllocationFlags);
+
+  // Create a class member to store the handle to the VRAM memory and allocate it.
+  // https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkAllocateMemory.html
+  //
+  // ...It should be noted that in a real world application, 
+  // you're not supposed to actually call vkAllocateMemory for every individual buffer. 
+  // The maximum number of simultaneous memory allocations is limited by the maxMemoryAllocationCount 
+  // physical device limit, which may be as low as 4096 even on high end hardware like an NVIDIA GTX 1080. 
+  //
+  // ...The right way to allocate memory for a large number of objects at the same time is to create 
+  // a custom allocator that splits up a single allocation among many different objects 
+  // by using the offset parameters that we've seen in many functions.
+  // https://vulkan.gpuinfo.org/displayreport.php?id=5261#limits
+  // (1060 6GB has 4096 allocation limits)
+  if (vkAllocateMemory(this->mGraphicsDevice, &allocateInfo, nullptr, &outBufferMemory)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to allocate vertex buffer memory.");
+  }
+
+  // (3) If memory allocation is successful, finally associate this memory buffer with
+  // the buffer using `vkBindBufferMemory`.
+  // the fourth parameter is the offset within the region of memory. 
+  // If the offset is non-zero, then it is required to be divisible by `memRequirements.alignment`.
+  if (vkBindBufferMemory(this->mGraphicsDevice, outBuffer, outBufferMemory, 0)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to bind buffer memory.");
+  }
+}
+
+void MVulkanRenderer::CopyBuffer(VkBuffer inSourceBuffer, VkDeviceSize inSize, VkBuffer outDestBuffer)
+{
+  // (1) To copy buffer from SRC_BIT to DST_BIT buffer,
+  // we need to command buffer for copying buffer to buffer.
+  VkCommandBufferAllocateInfo allocateInfo = {};
+  allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  allocateInfo.commandPool = this->mCommandPool; // Specify command pool to insert a buffer.
+  allocateInfo.commandBufferCount = 1;
+
+  VkCommandBuffer commandBuffer; // Create buffer.
+  vkAllocateCommandBuffers(this->mGraphicsDevice, &allocateInfo, &commandBuffer);
+
+  // (2) Fill record information.
+  VkCommandBufferBeginInfo beginInfo = {};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  // Because we're only going to use the command buffer once and
+  // wait with returning from the function until the copy operation has finisehd executing.
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkBeginCommandBuffer(commandBuffer, &beginInfo);
+
+  VkBufferCopy copyRegion;
+  copyRegion.srcOffset = 0;
+  copyRegion.dstOffset = 0;
+  copyRegion.size = inSize;
+  vkCmdCopyBuffer(commandBuffer, inSourceBuffer, outDestBuffer, 1, &copyRegion);
+
+  vkEndCommandBuffer(commandBuffer);
+
+  // (3) Submit command pool and wait (ONE_TIME_SUBMIT_BIT) to end the operation.
+  VkSubmitInfo submitInfo = {};
+  submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submitInfo.commandBufferCount = 1;
+  submitInfo.pCommandBuffers = &commandBuffer;
+
+  vkQueueSubmit(this->mGraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+  vkQueueWaitIdle(this->mGraphicsQueue);
+
+  // (4) Must free command buffer also.
+  vkFreeCommandBuffers(this->mGraphicsDevice, this->mCommandPool, 1, &commandBuffer);
 }
 
 void MVulkanRenderer::RecreateSwapChain()
@@ -1544,6 +1708,8 @@ void MVulkanRenderer::CleanUp()
   vkDeviceWaitIdle(this->mGraphicsDevice);
   this->CleanupSwapChain();
 
+  vkFreeMemory(this->mGraphicsDevice, sVertexElementMemory, nullptr);
+  vkDestroyBuffer(this->mGraphicsDevice, sVertexElementObject, nullptr);
   vkFreeMemory(this->mGraphicsDevice, sVertexBufferMemory, nullptr);
   vkDestroyBuffer(this->mGraphicsDevice, sVertexBufferObject, nullptr);
 

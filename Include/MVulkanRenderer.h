@@ -203,6 +203,17 @@ private:
   /// They can be used store vertex data, but they can also be used for many other purpose.
   /// But, unlike builtin buffer, customized buffer do not automatically allocate memory themselves.
   void CreateVertexBuffer();
+  /// @brief Create indice buffers.
+  ///
+  /// Actually, vertex and indices should be in one VkBuffer as written in Vulkan memory management link below.
+  /// This is cache friendly, and use offsets in commands like `vkCmdBindVertexBuffers`.
+  /// It is even possible to reuse the same chunk of memory for multiple resources if they are not
+  /// used during the same render operations. (but be careful of operation will be held asynchronously.)
+  /// 
+  /// Replace other resource to VkBuffer that are used by another resource is Aliasing.
+  /// And vulkan functions have explicit flags to specify that you want to do Aliasing.
+  /// @link https://developer.nvidia.com/vulkan-memory-management
+  void CreateIndiceBuffer();
   /// @brief Get preferred physical devices that on now valid memory type.
   /// iTypeFilter this will be used to specify the bit field of memory types that are suitable.
   ///
@@ -210,6 +221,17 @@ private:
   /// mapping buffer from CPU to GPU and such as special features.
   /// For example, Mapping buffer data from CPU to GPU is specified as VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT.
   MCR_NODISCARD TU32 FindMemoryTypes(TU32 iTypeFilter, VkMemoryPropertyFlags iProperties);
+
+  /// @brief Helper function just create plain buffer with size & usage.
+  /// Created buffer has exclusive sharing mode. and preferred memory type.
+  void CreateBuffer(
+      VkDeviceSize iSize, VkBufferUsageFlags iUsage, 
+      VkMemoryAllocateFlags iMemoryAllocationFlags,
+      VkBuffer& outBuffer, VkDeviceMemory& outBufferMemory);
+  /// @brief Copy SRC_BIT source buffer to DST_BIT buffer with inSize from offset 0.
+  /// Memory transfer operations are executed usig command buffers, like a drawing commands.
+  /// So, we have to allocate command buffer first, 
+  void CopyBuffer(VkBuffer inSourceBuffer, VkDeviceSize inSize, VkBuffer outDestBuffer);
 
   /// @brief Recreate swap chain when window property was changed.
   /// Created swap chain is no longer compatible with it because 
