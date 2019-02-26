@@ -42,6 +42,8 @@ public:
   /// In this case, rendering queue and presenting queue should be synchornized so 
   /// we have to semaphores `VkSemaphore`.
   void DrawFrame();
+  /// 
+  void UpdateUniformBuffer(TU32 iCurrentImageIndex);
 
 private:
   /// @brief Framebuffer resization callback function.
@@ -158,6 +160,27 @@ private:
   /// Vulkan must have framebuffer attachment information in advance.
   void CreateRenderPass();
 
+  /// @brief Create `Resource Descriptor` that lets shaders freely access resources like buffers
+  /// and images. (as textures)
+  /// There are many types of descriptors.
+  /// Descriptor layout describese the type of descriptors that can be bound.
+  ///
+  /// To handle uniform buffer & uniform varaibles of specified pipeline stage, we should create
+  /// Resource descriptor to be accessed from shader of pipeline.
+  /// 
+  /// Usage of descriptors consists of three parts...
+  /// 1. Specify a descriptor layout during pipeline creation.
+  /// 2. Allocate a descriptor set from a descriptor pool.
+  /// 3. Bind the descripor set during rendering.
+  /// 
+  /// And `Descriptor layout` specifies the types of resources that are going to be accessed by the pipeline,
+  /// just like a render pass specifies the types of attachments that will be accessed.
+  ///
+  /// `Descriptor set` specifies the actual bufferor image resources that will be bound to the descriptors,
+  /// just like a framebuffer specifies the actual image views to bind to render pass attachments.
+  ///
+  /// In this function, we just create descriptor layout & set as UBO.
+  void CreateDescriptorSetLayout();
   /// @brief Create graphics pipeline for actual rendering.
   void CreateGraphicsPipeline();
   /// @brief Create shader module with spir-v code buffer.
@@ -214,6 +237,15 @@ private:
   /// And vulkan functions have explicit flags to specify that you want to do Aliasing.
   /// @link https://developer.nvidia.com/vulkan-memory-management
   void CreateIndiceBuffer();
+  /// @brief Create proper uniform buffer object buffers.
+  /// 
+  /// We're going to copy new data to the uniform buffer EVERY FRAME, so it doesn't really make any
+  /// sense to make a staging buffer. (It just add extra overhead instead of improving.)
+  void CreateUniformBuffers();
+  /// @brief Create Descriptor pool that can allocate descriptor sets.
+  void CreateDescriptorPool();
+  /// @brief Afterward creating descriptor pool, we can create actual descriptor sets.
+  void CreateDescriptorSets();
   /// @brief Get preferred physical devices that on now valid memory type.
   /// iTypeFilter this will be used to specify the bit field of memory types that are suitable.
   ///
@@ -284,6 +316,15 @@ public:
   /// ... Each pipeline is created using a pipeline layout.
   /// https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkPipelineLayout.html
   VkPipelineLayout  mPipelineLayout;
+  /// @brief Opaque handle to a descriptor set layout object.
+  /// In this case, we set layout for UBO.
+  /// Descriptor layout describese the type of descriptors that can be bound.
+  /// https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorSetLayout.html
+  VkDescriptorSetLayout mDescriptorSetLayout;
+  /// @brief
+  VkDescriptorPool  mDescriptorPool;
+  /// @brief
+  std::vector<VkDescriptorSet> mDescriptorSets;
   /// @brief
   VkPipeline        mPipeline;
   

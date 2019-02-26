@@ -51,9 +51,11 @@ add_executable(VulkanSandbox main.cpp)
 
 set(GLFW_LIB_PATH	C:\\TPLibraries\\glfw-3.2.1\\build\\src\\${CMAKE_BUILD_TYPE})
 set(VULKAN_LIB_PATH C:\\VulkanSDK\\1.1.85.0\\Lib)
+set(FMT_LIB_PATH	C:\\TPLibraries\\fmt-5.3.0\\build\\${CMAKE_BUILD_TYPE})
 
 link_directories(${GLFW_LIB_PATH})
 link_directories(${VULKAN_LIB_PATH})
+link_directories(${FMT_LIB_PATH})
 
 find_library(
   GLFW3
@@ -66,7 +68,14 @@ find_library(
   NAMES vulkan-1.lib
   HINTS ${VULKAN_LIB_PATH}
   REQUIRED)
+    
+find_library(
+  FMT
+  NAMES fmtd.lib
+  HINTS ${FMT_LIB_PATH}
+  REQUIRED)
 
+target_link_libraries(VulkanSandbox ${FMT})
 target_link_libraries(VulkanSandbox ${GLFW3})
 target_link_libraries(VulkanSandbox ${VULKAN})
 target_link_libraries(VulkanSandbox Source)

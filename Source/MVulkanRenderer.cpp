@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
+#include <chrono>
 #include <set>
 
 #include "ESuccess.h"
@@ -21,6 +22,11 @@
 #include "FHelperVulkan.h"
 #include "FHelperFileIO.h"
 #include "Temp/DDefaultVertex.h"
+#include "Temp/U0UniformBufferObject.h"
+
+#define GLM_FORCE_RADIANS
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 namespace
 {
@@ -84,7 +90,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VkDebugCallback(
   return VK_FALSE;
 }
 
-const std::vector<sh::DDefaultVertex> sTempVertices = {
+const std::vector<dy::DDefaultVertex> sTempVertices = {
     // Position,          // Color,
     {{0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
     {{0.5f, 0.5f,  0.0f}, {0.0f, 1.0f, 0.0f}},
@@ -102,6 +108,12 @@ VkDeviceMemory  sVertexBufferMemory;
 
 VkBuffer        sVertexElementObject;
 VkDeviceMemory  sVertexElementMemory;
+
+// + We should have multiple buffers, because multiple frames may be in flight at the same time!
+// and we don't want to update the buffer in presentation mode while a previous one is still reading
+// from it.
+std::vector<VkBuffer>       sUniformBufferObjects;
+std::vector<VkDeviceMemory> sUniformBufferMemories;
 
 } /// anonymouse namespace
 
@@ -166,6 +178,7 @@ EDySuccess MVulkanRenderer::pfInitialize()
   this->CreateSwapChainImageViews();
   // 
   this->CreateRenderPass();
+  this->CreateDescriptorSetLayout();
   this->CreateGraphicsPipeline();
   this->CreateFrameBuffer();
   //
@@ -173,6 +186,9 @@ EDySuccess MVulkanRenderer::pfInitialize()
   //
   this->CreateVertexBuffer();
   this->CreateIndiceBuffer();
+  this->CreateUniformBuffers();
+  this->CreateDescriptorPool();
+  this->CreateDescriptorSets();
   this->CreateCommandBuffers();
   //
   this->CreateDefaultSemaphores();
@@ -938,6 +954,36 @@ void MVulkanRenderer::CreateRenderPass()
   }
 }
 
+void MVulkanRenderer::CreateDescriptorSetLayout()
+{
+  // (1) 
+  // the binding number of this entry and corresponds to a resource of the same binding number 
+  // in the shader stages.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorSetLayoutBinding.html
+  VkDescriptorSetLayoutBinding uboLayoutBinding = {};
+  uboLayoutBinding.binding          = 0;
+  uboLayoutBinding.descriptorType   = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  uboLayoutBinding.descriptorCount  = 1;
+
+  // We also need to specify in which stage stages the descriptor is going to be referenced.
+  // The `stageFlags` field can be a combination of `VkShaderStageFlagBits`.
+  uboLayoutBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
+  uboLayoutBinding.pImmutableSamplers = nullptr; // This is only relevant for image sampling.
+
+  // (2) Create binding descriptor using `VkDescriptorSetLayoutCreateInfo`.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorSetLayoutCreateInfo.html
+  VkDescriptorSetLayoutCreateInfo layoutInfo = {};
+  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 1;
+  layoutInfo.pBindings = &uboLayoutBinding;
+
+  if (vkCreateDescriptorSetLayout(this->mGraphicsDevice, &layoutInfo, nullptr, &this->mDescriptorSetLayout)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to create descriptor set layout.");
+  }
+}
+
 void MVulkanRenderer::CreateGraphicsPipeline()
 {
   // Temporary code. Read spir-v shader file.
@@ -1013,9 +1059,9 @@ void MVulkanRenderer::CreateFixedRenderPipeline(
   vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
   // Like this.
   vertexInputInfo.vertexBindingDescriptionCount   = 1;
-  vertexInputInfo.pVertexBindingDescriptions      = &sh::DDefaultVertex::GetBindingDescription();
-  vertexInputInfo.vertexAttributeDescriptionCount = TU32(sh::DDefaultVertex::GetAttributeDescriptons().size());
-  vertexInputInfo.pVertexAttributeDescriptions    = sh::DDefaultVertex::GetAttributeDescriptons().data();
+  vertexInputInfo.pVertexBindingDescriptions      = &dy::DDefaultVertex::GetBindingDescription();
+  vertexInputInfo.vertexAttributeDescriptionCount = TU32(dy::DDefaultVertex::GetAttributeDescriptons().size());
+  vertexInputInfo.pVertexAttributeDescriptions    = dy::DDefaultVertex::GetAttributeDescriptons().data();
 
   // (2) Input assembly
   // creatInfo structure describes two things.
@@ -1070,7 +1116,7 @@ void MVulkanRenderer::CreateFixedRenderPipeline(
   rasterizerInfo.polygonMode  = VK_POLYGON_MODE_FILL;
   rasterizerInfo.lineWidth    = 1.0f;
   rasterizerInfo.cullMode     = VK_CULL_MODE_BACK_BIT;
-  rasterizerInfo.frontFace    = VK_FRONT_FACE_CLOCKWISE;
+  rasterizerInfo.frontFace    = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   // We don't use depth bias now. (This used when implementing shadow mapping)
   rasterizerInfo.depthBiasEnable = VK_FALSE;
 
@@ -1137,11 +1183,13 @@ void MVulkanRenderer::CreateFixedRenderPipeline(
   // need to be specified during pipeline creation by creating `VkPipelineLayout` object.
   // Even though unifrom varaibles are not used yet, must be required one pipeline layout.
   //
+  // And, VkDescriptorSetLayoutCreateInfo is created and need to be bound to creating pipeline,
+  // User must set layouts into `setLayoutCount` and `pSetLayouts`.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCreatePipelineLayout.html
   VkPipelineLayoutCreateInfo pipelineLayoutInfo = {};
   pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  pipelineLayoutInfo.setLayoutCount = 0; // Optional
-  pipelineLayoutInfo.pSetLayouts = nullptr; // Optional
+  pipelineLayoutInfo.setLayoutCount = 1; 
+  pipelineLayoutInfo.pSetLayouts    = &this->mDescriptorSetLayout; 
   pipelineLayoutInfo.pushConstantRangeCount = 0; // Optional
   pipelineLayoutInfo.pPushConstantRanges = nullptr; // Optional
 
@@ -1325,10 +1373,14 @@ void MVulkanRenderer::CreateCommandBuffers()
     std::vector<VkBuffer> indexBuffers = {sVertexElementObject};
     vkCmdBindIndexBuffer(this->mCommandBuffers[i], sVertexElementObject, 0, VK_INDEX_TYPE_UINT32);
 
+    vkCmdBindDescriptorSets(
+        this->mCommandBuffers[i], 
+        VK_PIPELINE_BIND_POINT_GRAPHICS, this->mPipelineLayout, 0, 1,
+        &this->mDescriptorSets[i],0, nullptr);
+
     // Draw!! (glDrawArrays)
     // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCmdDraw.html
     //vkCmdDraw(this->mCommandBuffers[i], static_cast<TU32>(sTempVertices.size()), 1, 0, 0);
-
     vkCmdDrawIndexed(this->mCommandBuffers[i], static_cast<TU32>(sTempIndices.size()), 1, 0, 0, 0);
 
     // Finish render pass. 
@@ -1501,6 +1553,109 @@ void MVulkanRenderer::CreateIndiceBuffer()
   this->CopyBuffer(stagingBuffer, bufferSize, sVertexElementObject);
   vkFreeMemory(this->mGraphicsDevice, stagingBufferMemory, nullptr);
   vkDestroyBuffer(this->mGraphicsDevice, stagingBuffer, nullptr);
+}
+
+void MVulkanRenderer::CreateUniformBuffers()
+{
+  // We have to update separated image and framebuffer that updates the uniform buffer with 
+  // a new transformation every frame. So there is no vkMapMemory.
+  VkDeviceSize bufferSize = sizeof(dy::UUniformBufferObject);
+  sUniformBufferObjects.resize(this->mSwapChainImages.size());
+  sUniformBufferMemories.resize(this->mSwapChainImages.size());
+
+  for (size_t i = 0; i < this->mSwapChainImages.size(); ++i)
+  {
+    this->CreateBuffer(
+        bufferSize, 
+        VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        sUniformBufferObjects[i],
+        sUniformBufferMemories[i]);
+  }
+}
+
+void MVulkanRenderer::CreateDescriptorPool()
+{
+  // 
+  VkDescriptorPoolSize poolSize;
+  poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  poolSize.descriptorCount = static_cast<TU32>(this->mSwapChainImages.size());
+
+  // Structure specifying paramters of a newly created descriptor pool.
+  // The structrue has an ooptional flag similar to command pools that determines if individual
+  // descriptor sets can be freed or not.
+  // : VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
+  //
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorPoolCreateInfo.html
+  VkDescriptorPoolCreateInfo poolInfo = {};
+  poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  poolInfo.poolSizeCount = 1;
+  poolInfo.pPoolSizes = &poolSize;
+  poolInfo.maxSets = static_cast<TU32>(this->mSwapChainImages.size());;
+
+  if (vkCreateDescriptorPool(this->mGraphicsDevice, &poolInfo, nullptr, &this->mDescriptorPool)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to create descriptor pool");
+  }
+}
+
+void MVulkanRenderer::CreateDescriptorSets()
+{
+  // Structure specifying the allocation parameters for descriptor sets
+  // A Descriptor set allocation is described VkDescriptorSetAllocateInfo. 
+  // But to create Descriptor set, we need descriptor pool to allocate set and
+  // Descriptor layout to base them on.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorSetAllocateInfo.html
+
+  // In our case we will create one descriptor set for each swap chain image, 
+  // all with the same layout. Unfortunately we do need all the copies of the layout 
+  // because the next function expects an array matching the number of sets.
+  std::vector<VkDescriptorSetLayout> layouts(this->mSwapChainImages.size(), this->mDescriptorSetLayout);
+  VkDescriptorSetAllocateInfo allocInfo = {};
+  allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  allocInfo.descriptorPool      = this->mDescriptorPool;
+  allocInfo.descriptorSetCount  = static_cast<TU32>(this->mSwapChainImages.size());
+  allocInfo.pSetLayouts         = layouts.data();
+
+  // You don't need to explicitly clean up descriptor sets, 
+  // because they will be automatically freed when the descriptor pool is destroyed.
+  this->mDescriptorSets.resize(this->mSwapChainImages.size());
+  if (vkAllocateDescriptorSets(this->mGraphicsDevice, &allocInfo, this->mDescriptorSets.data())
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to allocate descriptor sets.");
+  }
+
+  // Descriptor sets are allocated now, but need to be configured of descriptor set.
+  // We need to update all descriptor sets to be accessed by each buffer of swapchain.
+  for (size_t i = 0; i < this->mSwapChainImages.size(); ++i)
+  {
+    VkWriteDescriptorSet descriptorWrite = {};
+    descriptorWrite.sType   = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet  = this->mDescriptorSets[i];
+    // We gave our uniform buffer binding index to 0. 
+    // Caution, descriptors can be arrays so we need to specify the first index in the descripor array.
+    descriptorWrite.dstBinding      = 0;
+    descriptorWrite.dstArrayElement = 0;
+    // Set buffer type and descriptor count.
+    descriptorWrite.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+
+    //
+    VkDescriptorBufferInfo bufferInfo = {};
+    bufferInfo.buffer = sUniformBufferObjects[i];
+    bufferInfo.offset = 0;
+    bufferInfo.range  = sizeof(dy::UUniformBufferObject);
+
+    descriptorWrite.pBufferInfo     = &bufferInfo;
+    descriptorWrite.pImageInfo        = nullptr;
+    descriptorWrite.pTexelBufferView  = nullptr;
+
+    // Update the contents of a descriptor set object.
+    // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkUpdateDescriptorSets.html
+    vkUpdateDescriptorSets(this->mGraphicsDevice, 1, &descriptorWrite, 0, nullptr);
+  }
 }
 
 TU32 MVulkanRenderer::FindMemoryTypes(TU32 iTypeFilter, VkMemoryPropertyFlags iProperties)
@@ -1707,6 +1862,16 @@ void MVulkanRenderer::CleanUp()
   // To synchronize drawFrame functions, this function must be called.
   vkDeviceWaitIdle(this->mGraphicsDevice);
   this->CleanupSwapChain();
+  
+  vkDestroyDescriptorPool(this->mGraphicsDevice, this->mDescriptorPool, nullptr);
+
+  for (size_t i = 0; i < this->mSwapChainImages.size(); ++i)
+  {
+    vkFreeMemory(this->mGraphicsDevice, sUniformBufferMemories[i], nullptr);
+    vkDestroyBuffer(this->mGraphicsDevice, sUniformBufferObjects[i], nullptr);
+  }
+
+  vkDestroyDescriptorSetLayout(this->mGraphicsDevice, this->mDescriptorSetLayout, nullptr);
 
   vkFreeMemory(this->mGraphicsDevice, sVertexElementMemory, nullptr);
   vkDestroyBuffer(this->mGraphicsDevice, sVertexElementObject, nullptr);
@@ -1788,6 +1953,7 @@ void MVulkanRenderer::DrawFrame()
   
   // If we get imageIndex, imageIndex refers to the `VkImage` in member variable.
   // (If we align list of VkImage, RIP)
+  UpdateUniformBuffer(imageIndex);
 
   // (2) Queue submission and synchronization is configured using `VkSubmitIfo` structure.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkSubmitInfo.html
@@ -1846,6 +2012,36 @@ void MVulkanRenderer::DrawFrame()
   // By using the modulo (%) operator, 
   // we ensure that the frame index loops around after every MAX_FRAMES_IN_FLIGHT enqueued frames.
   this->mCurrentRenderFrame = (this->mCurrentRenderFrame + 1) % kMaxFramesInFlight;
+}
+
+void MVulkanRenderer::UpdateUniformBuffer(TU32 iCurrentImageIndex)
+{
+  static auto startTime = std::chrono::high_resolution_clock::now();
+
+  const auto currentTime = std::chrono::high_resolution_clock::now();
+  TF32 time = std::chrono::duration<TF32, std::chrono::seconds::period>(
+      currentTime - startTime
+  ).count();
+
+  dy::UUniformBufferObject ubo = {};
+  ubo.uModel = glm::rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(.0f, .0f, 1.f));
+  ubo.uView  = glm::lookAt(glm::vec3(2.0f), glm::vec3(0.0f), glm::vec3(.0f, .0f, 1.f));
+  ubo.uProj  = glm::perspective(
+      glm::radians(45.f), 
+      this->mSwapChainExtent.width / (float) this->mSwapChainExtent.height,
+      0.1f,
+      10.0f);
+
+  // We need invert y to negative, because vulkan NDC has negative y axis.
+  // https://stackoverflow.com/questions/48036410/why-doesnt-vulkan-use-the-standard-cartesian-coordinate-system
+  ubo.uProj[1][1] *= -1; 
+
+  void* data;
+  vkMapMemory(
+      this->mGraphicsDevice, 
+      sUniformBufferMemories[iCurrentImageIndex], 0, sizeof(ubo), 0, &data);
+  memcpy(data, &ubo, sizeof(ubo));
+  vkUnmapMemory(this->mGraphicsDevice, sUniformBufferMemories[iCurrentImageIndex]);
 }
 
 void MVulkanRenderer::CbGLFWFrameBufferResize(
