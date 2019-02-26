@@ -17,7 +17,7 @@
 #include <glm/glm.hpp>
 #include "System/AAssertion.h"
 
-namespace sh 
+namespace dy
 {
 
 /// @struct DVector3
@@ -26,12 +26,7 @@ struct DVector3 final
 {
   union 
   { 
-    struct 
-    {
-      float X; 
-      float Y;
-      float Z;
-    }; 
+    struct { float X; float Y; float Z; }; 
   };
 
   DVector3() = default;
@@ -254,6 +249,6 @@ struct DVector3 final
 
 static_assert(sizeof(DVector3) == 12, "Test failed");
 
-} /// ::sh namespace
+} /// ::dy namespace
 
 #endif /// GUARD_DY_HELPER_TYPE_VECTOR3_H

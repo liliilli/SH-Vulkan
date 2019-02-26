@@ -19,7 +19,7 @@
 
 #include "System/AAssertion.h"
 
-namespace sh
+namespace dy
 {
 
 /// @struct DVector2
@@ -28,11 +28,7 @@ struct DVector2 final
 {
   union 
   { 
-    struct 
-    {
-      float X = 0.0f; 
-      float Y = 0.0f;
-    }; 
+    struct { float X = 0.0f; float Y = 0.0f; }; 
   };
 
   DVector2() = default;
@@ -234,6 +230,6 @@ public:
 
 static_assert(sizeof(DVector2) == 8, "Test failed");
 
-} /// ::sh namespace
+} /// ::dy namespace
 
 #endif /// GUARD_DY_HELPER_TYPE_VECTOR2_H
