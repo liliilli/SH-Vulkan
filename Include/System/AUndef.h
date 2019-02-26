@@ -18,3 +18,11 @@
 #if defined(min)
 #undef min
 #endif
+
+#ifdef near
+#undef near
+#endif
+#ifdef far
+#undef far
+#endif
+
