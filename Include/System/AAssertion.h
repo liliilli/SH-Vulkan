@@ -57,7 +57,8 @@ namespace sh
 #else
 
 #define PHITOS_SET_RELEASE_FUNCTION(__MAFunc__) (void(0))
-#define MDY_ASSERT(__MAExpr__, __MAMessage__) (void(0))
+#define MDY_ASSERT_MSG(__MAExpr__, __MAMessage__) (void(0))
+#define MDY_ASSERT(__MAExpr__) (void(0))
 #define MDY_NOT_IMPLEMENTED_ASSERT() (void(0));
 #define MDY_UNEXPECTED_BRANCH() (void(0))
 

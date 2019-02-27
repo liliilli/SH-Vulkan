@@ -27,6 +27,7 @@
 #define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include "Library/DImageBuffer.h"
 
 namespace
 {
@@ -92,10 +93,10 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VkDebugCallback(
 
 const std::vector<dy::DDefaultVertex> sTempVertices = {
     // Position,          // Color,
-    {{0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}},
-    {{0.5f, 0.5f,  0.0f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}},
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 1.0f}}
+    {{0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.f, 0.f}},
+    {{0.5f, 0.5f,  0.0f}, {0.0f, 1.0f, 0.0f}, {1.f, 1.f}},
+    {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.f, 1.f}},
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 1.0f},{0.f, 0.f}}
 };
 
 const std::vector<TU32> sTempIndices = {
@@ -183,6 +184,10 @@ EDySuccess MVulkanRenderer::pfInitialize()
   this->CreateFrameBuffer();
   //
   this->CreateCommandPool();
+  //
+  this->CreateTextureImage();
+  this->CreateTextureImageView();
+  this->CreateTextureSampler();
   //
   this->CreateVertexBuffer();
   this->CreateIndiceBuffer();
@@ -822,35 +827,10 @@ void MVulkanRenderer::CreateSwapChainImageViews()
   for (TU32 imageId = 0, size = static_cast<TU32>(this->mSwapChainImageViews.size());
        imageId < size; ++imageId)
   {
-    // We also create VkImageView using VkImageViewCreateInfo and vkCreateImageView function.
-    // VkImageViewCreateInfo : 
-    // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageViewCreateInfo.html
-    VkImageViewCreateInfo createInfo = {};
-    createInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    createInfo.image    = this->mSwapChainImages[imageId];
-    createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; // We use 2D texture view.
-    createInfo.format   = this->mSwapChainImageFormat; 
-    // `components` field allows to swizzle the color channels around. (like variable.xxyw)
-    // VkComponentSwizzle : 
-    // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkComponentSwizzle.html
-    createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY; // .r
-    createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY; // .g
-    createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY; // .b
-    createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY; // .a default.
-    // `subresourceRange` describes what the image's purpose is
-    // and which part of the image should be accessed...
-    createInfo.subresourceRange.aspectMask      = VK_IMAGE_ASPECT_COLOR_BIT;
-    createInfo.subresourceRange.baseMipLevel    = 0;
-    createInfo.subresourceRange.levelCount      = 1;
-    createInfo.subresourceRange.baseArrayLayer  = 0;
-    createInfo.subresourceRange.layerCount      = 1;
-
-    // Created `VkImageView` is not bound to `VkSwapChainKHR` so need to be destroyed explicitly.
-    if (vkCreateImageView(this->mGraphicsDevice, &createInfo, nullptr, &this->mSwapChainImageViews[imageId])
-        != VK_SUCCESS)
-    {
-      throw std::runtime_error("Failed to create image view.");
-    }
+    this->mSwapChainImageViews[imageId] = this->CreateImageView(
+        this->mSwapChainImages[imageId],
+        this->mSwapChainImageFormat
+    );
   }
 }
 
@@ -859,7 +839,6 @@ void MVulkanRenderer::CreateRenderPass()
   // (1) In our case, we have just a single color buffer attachment. (CreateSwapChain)
   // Textures and framebuffers in Vulkan are represented by `VkImage` object with a certain pixel format.
   // Layout != Format... and layout can be changed based on what to do with an `VkImage`.
-  //
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkAttachmentDescription.html
   VkAttachmentDescription colorAttachment = {};
   colorAttachment.format  = this->mSwapChainImageFormat; // Format must be matched to swapchain image.
@@ -956,11 +935,11 @@ void MVulkanRenderer::CreateRenderPass()
 
 void MVulkanRenderer::CreateDescriptorSetLayout()
 {
-  // (1) 
+  // (1) FOR UNIFORM BUFFER OBJECT.
   // the binding number of this entry and corresponds to a resource of the same binding number 
   // in the shader stages.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorSetLayoutBinding.html
-  VkDescriptorSetLayoutBinding uboLayoutBinding = {};
+  VkDescriptorSetLayoutBinding uboLayoutBinding;
   uboLayoutBinding.binding          = 0;
   uboLayoutBinding.descriptorType   = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
   uboLayoutBinding.descriptorCount  = 1;
@@ -970,18 +949,27 @@ void MVulkanRenderer::CreateDescriptorSetLayout()
   uboLayoutBinding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;
   uboLayoutBinding.pImmutableSamplers = nullptr; // This is only relevant for image sampling.
 
+  // (1) FOR TEXTURE SAMPLER.
+  VkDescriptorSetLayoutBinding textureLayoutBinding;
+  textureLayoutBinding.binding         = 1;
+  textureLayoutBinding.descriptorCount = 1;
+  textureLayoutBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  textureLayoutBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+  textureLayoutBinding.pImmutableSamplers = nullptr; // This is only relevant for image sampling.
+  
   // (2) Create binding descriptor using `VkDescriptorSetLayoutCreateInfo`.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorSetLayoutCreateInfo.html
+  std::vector<VkDescriptorSetLayoutBinding> bindings = 
+      {uboLayoutBinding, textureLayoutBinding};
   VkDescriptorSetLayoutCreateInfo layoutInfo = {};
-  layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  layoutInfo.bindingCount = 1;
-  layoutInfo.pBindings = &uboLayoutBinding;
+  layoutInfo.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  layoutInfo.bindingCount = 2;
+  layoutInfo.pBindings    = bindings.data();
 
-  if (vkCreateDescriptorSetLayout(this->mGraphicsDevice, &layoutInfo, nullptr, &this->mDescriptorSetLayout)
+  if (vkCreateDescriptorSetLayout(
+      this->mGraphicsDevice, &layoutInfo, nullptr, &this->mDescriptorSetLayout)
       != VK_SUCCESS)
-  {
-    throw std::runtime_error("Failed to create descriptor set layout.");
-  }
+  { throw std::runtime_error("Failed to create descriptor set layout."); }
 }
 
 void MVulkanRenderer::CreateGraphicsPipeline()
@@ -1431,6 +1419,278 @@ void MVulkanRenderer::CreateDefaultSemaphores()
   }
 }
 
+void MVulkanRenderer::CreateTextureImage()
+{
+  // (1) Read image buffer.
+  // We create staging buffer for texture.
+  VkBuffer stagingBuffer;
+  VkDeviceMemory stagingBufferMemory;
+  TU32 width, height;
+  {
+    dy::DDyImageBinaryDataBuffer imageBuffer{"../../Resource/texture.jpg"};
+    MDY_ASSERT(imageBuffer.IsBufferCreatedProperly() == true);
+
+    this->CreateBuffer(imageBuffer.GetBufferSize(), 
+        VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        stagingBuffer, stagingBufferMemory);
+
+    void* data;
+    vkMapMemory(this->mGraphicsDevice, stagingBufferMemory, 0, imageBuffer.GetBufferSize(), 0, &data);
+    memcpy(data, imageBuffer.GetBufferStartPoint(), imageBuffer.GetBufferSize());
+    vkUnmapMemory(this->mGraphicsDevice, stagingBufferMemory);
+
+    width  = imageBuffer.GetImageWidth();
+    height = imageBuffer.GetImageHeight();
+  }
+
+  // (2) Create image create info.
+  // Created image `this->mTextureImage` was created with VK_IMAGE_LAYOUT_UNDEFINED,
+  // so we need transit it to VK_IMAGE_USAGE_TRANSFER_DST_BIT.
+  this->CreateImage(width, height, 
+      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
+      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      this->mTextureImage, this->mTextureImageMemory);
+
+  // We can copy buffer to image because layout transition of VkImage is done.
+  // But we can transit to this to DST, because we don't care about created image buffer contents.
+  this->TransitImageLayout(
+      this->mTextureImage, 
+      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+  this->CopyBufferToImage(stagingBuffer, this->mTextureImage, width, height);
+
+  // We also need to transit DST_LAYOUT image to SHADER_READ_ONLY
+  // because we let it be able to be readen from shader access.
+  this->TransitImageLayout(
+      this->mTextureImage,
+      VK_FORMAT_R8G8B8A8_UNORM, 
+      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+  vkFreeMemory(this->mGraphicsDevice, stagingBufferMemory, nullptr);
+  vkDestroyBuffer(this->mGraphicsDevice, stagingBuffer, nullptr);
+}
+
+void MVulkanRenderer::CreateTextureImageView()
+{
+  // That's it!
+  this->mTextureImageView = this->CreateImageView(this->mTextureImage, VK_FORMAT_R8G8B8A8_UNORM);
+}
+
+void MVulkanRenderer::CreateImage(
+    TU32 iWidth, TU32 iHeight, 
+    VkFormat iFormat, VkImageTiling iTiling, 
+    VkImageUsageFlags iUsage, VkMemoryPropertyFlags iProperties, 
+    VkImage& outImage, VkDeviceMemory& outImageMemory)
+{
+// (2) Fill image create info.
+  VkImageCreateInfo createInfo = {};
+  createInfo.sType          = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  createInfo.imageType      = VK_IMAGE_TYPE_2D;
+  createInfo.extent.width   = iWidth;
+  createInfo.extent.height  = iHeight;
+  createInfo.extent.depth   = 1; // Depth must be larger than 0 because it just sspecifies dimensions.
+  createInfo.mipLevels      = 1;
+  createInfo.arrayLayers    = 1;
+  // We should use the same format for the texels as the pixels in the buffer.
+  // Actually, we should check this format is supported by hardward.
+  // IF given format is not supported by hardware, we have to check most sub-optimal format.
+  // and should be convert pixel format to specified format.
+  createInfo.format = iFormat;
+  // VkImageTiling 
+  // OPTIMAL : texels are laid out in an implementation-dependent arrangement.
+  // TILTING MODE CAN NOT BE CHANGED AT A LATER TIME but layout can be changed.
+  // If you want to be able to directly access to texels in the memory, must use LINEAR flag.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageTiling.html
+  createInfo.tiling = iTiling; 
+  // 
+  createInfo.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
+  createInfo.usage          = iUsage;
+  createInfo.sharingMode    = VK_SHARING_MODE_EXCLUSIVE;
+  createInfo.samples        = VK_SAMPLE_COUNT_1_BIT;
+  // Some optional flags for images that are related to sparse images.
+  createInfo.flags          = 0;
+
+  if (vkCreateImage(this->mGraphicsDevice, &createInfo, nullptr, &outImage)
+      != VK_SUCCESS)
+  { throw std::runtime_error("Failed to create image."); }
+
+  // (3) Allocating memory for the image above is to query its memory requirements
+  // using name `vkGetImageMemoryRequirements`...
+  VkMemoryRequirements memoryRequirements;
+  vkGetImageMemoryRequirements(this->mGraphicsDevice, outImage, &memoryRequirements);
+
+  // Graphics cards can offer different types of memory to allocate from. (IMPORTANT)
+  // Independent to bufferInfo yet.
+  VkMemoryAllocateInfo allocateInfo = {};
+  allocateInfo.sType            = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  allocateInfo.allocationSize   = memoryRequirements.size;
+  allocateInfo.memoryTypeIndex  = FindMemoryTypes(memoryRequirements.memoryTypeBits, iProperties);
+
+  if (vkAllocateMemory(this->mGraphicsDevice, &allocateInfo, nullptr, &outImageMemory)
+      != VK_SUCCESS)
+  { throw std::runtime_error("Failed to allocate vertex buffer memory."); }
+
+  if (vkBindImageMemory(this->mGraphicsDevice, outImage, outImageMemory, 0)
+      != VK_SUCCESS)
+  { throw std::runtime_error("Failed to bind buffer memory."); }
+}
+
+void MVulkanRenderer::TransitImageLayout(
+    VkImage iImage, [[maybe_unused]] VkFormat iFormat, 
+    VkImageLayout iOldLayout, VkImageLayout iNewLayout)
+{
+  // Create one time command buffer (stop-the-world)
+  VkCommandBuffer commandBuffer = this->BeginSingleTimeCommands();
+
+  // Using `VkImageMemoryBarrier`, try transit image to appropriate layout.
+  // A pipeline barrier like that is generally used to synchronize access to resources,
+  // like ensuring that a write to a buffer completes before reading from it.
+  //
+  // But `VkImageMemoryBa..` or `VkBuffer..` can be used to transit image (buffer) to layout
+  // and transfer queue family ownership only if VkImage and VkBuffer sharing mode is EXCLUSIVE.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageMemoryBarrier.html
+  VkImageMemoryBarrier barrier = {};
+  barrier.sType     = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  barrier.oldLayout = iOldLayout;
+  barrier.newLayout = iNewLayout;
+
+  // We does not use this barrier to transfer between queue barrier ownership,
+  // so we does not specify specified the indices of queue family, but IGNORED flag.
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.image = iImage,
+  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  barrier.subresourceRange.baseMipLevel = 0;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.baseArrayLayer = 0;
+  barrier.subresourceRange.layerCount = 1;
+
+  // We are not using automatic synchronization waiting stage because we are using
+  // vkQueueWaitIdle in EndSingleTimeCommands function.
+  // But, We also must handle `TRANSITION BARRIER MASKS` too,
+  // becuase each stage of pipeline is asynchronous. XP
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkPipelineStageFlags.html
+  //
+  // In this function, there are two transitions we need to handle...
+  // UNDEFINED => DST_OPTIMAL : In this case, we don't have to wait anything just write.
+  // DST_OPTIMAL => SHADER_READ : Fragment shader (we use texture in fragment shader) 
+  // reads should wait on transfer write.
+  VkPipelineStageFlags sourceStages = 0;
+  VkPipelineStageFlags destinationStages = 0;
+
+  if (iOldLayout == VK_IMAGE_LAYOUT_UNDEFINED
+  &&  iNewLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+  {
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+    // We need to know that VK_PIPELINE_STAGE_TRANSFER_BIT is not real stage within grap & comp.
+    // It's more like a pseudo stage where transitios happen.
+    // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkPipelineStageFlagBits.html
+    sourceStages      = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    destinationStages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+  }
+  else if (iOldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+        && iNewLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+  {
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+    sourceStages      = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    destinationStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+  }
+  else { throw std::invalid_argument("Unsupported layout transition."); }
+
+  // All types of pipeline barriers are submitted using the same function. 
+  // The first parameter after the command buffer specifies in which pipeline stage 
+  // the operations occur that should happen before the barrier. 
+  // The second parameter specifies the pipeline stage in which operations will wait on the barrier. 
+  //
+  // https://www.khronos.org/registry/vulkan/specs/1.0/html/vkspec.html#synchronization-access-types-supported
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCmdPipelineBarrier.html
+  // https://vulkan-tutorial.com/Texture_mapping/Images
+  vkCmdPipelineBarrier(
+      commandBuffer, 
+      sourceStages, destinationStages, 
+      0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+  // For practical applications it is recommended to combine these operations in a single 
+  // command buffer and execute them asynchronously for higher throughput, 
+  // especially the transitions and copy in the createTextureImage function... 
+  this->EndSingleTimeCommands(commandBuffer);
+}
+
+VkImageView MVulkanRenderer::CreateImageView(VkImage iImage, VkFormat iFormat)
+{
+  // We also create VkImageView using VkImageViewCreateInfo and vkCreateImageView function.
+  // VkImageViewCreateInfo : 
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageViewCreateInfo.html
+  VkImageViewCreateInfo createInfo = {};
+  createInfo.sType    = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  createInfo.image    = iImage;
+  createInfo.viewType = VK_IMAGE_VIEW_TYPE_2D; // We use 2D texture view.
+  createInfo.format   = iFormat;
+
+  // `components` field allows to swizzle the color channels around. (like variable.xxyw)
+  // VkComponentSwizzle : 
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkComponentSwizzle.html
+  createInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY; // .r
+  createInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY; // .g
+  createInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY; // .b
+  createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY; // .a default.
+  // `subresourceRange` describes what the image's purpose is
+  // and which part of the image should be accessed...
+  createInfo.subresourceRange.aspectMask      = VK_IMAGE_ASPECT_COLOR_BIT;
+  createInfo.subresourceRange.baseMipLevel    = 0;
+  createInfo.subresourceRange.levelCount      = 1;
+  createInfo.subresourceRange.baseArrayLayer  = 0;
+  createInfo.subresourceRange.layerCount      = 1;
+
+  // Created `VkImageView` is not bound to `VkSwapChainKHR` so need to be destroyed explicitly.
+  VkImageView resultImageView;
+  if (vkCreateImageView(this->mGraphicsDevice, &createInfo, nullptr, &resultImageView)
+      != VK_SUCCESS)
+  {
+    throw std::runtime_error("Failed to create image view.");
+  }
+
+  return resultImageView;
+}
+
+void MVulkanRenderer::CreateTextureSampler()
+{
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkSamplerCreateInfo.html
+  VkSamplerCreateInfo createInfo = {};
+  createInfo.sType        = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+  createInfo.magFilter    = VK_FILTER_LINEAR;
+  createInfo.minFilter    = VK_FILTER_LINEAR;
+  createInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  createInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  createInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+  // https://en.wikipedia.org/wiki/Anisotropic_filtering
+  // We do not use anisotropic filtering because we did not enable feature of physical device.
+  createInfo.anisotropyEnable = VK_FALSE;
+  createInfo.maxAnisotropy    = 1;
+  // In vulkan, you can not specify an arbitary color.
+  createInfo.borderColor      = VK_BORDER_COLOR_INT_OPAQUE_BLACK;
+  // If true, you can use coordinate as [0, texWidth) and [0, texHeight)
+  // But in real application, almost use normalized coordinate [0, 1) both.
+  createInfo.unnormalizedCoordinates = VK_FALSE;
+  // https://developer.nvidia.com/gpugems/GPUGems/gpugems_ch11.html
+  createInfo.compareEnable    = VK_FALSE;
+  createInfo.compareOp        = VK_COMPARE_OP_ALWAYS;
+  createInfo.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+  // Level of detail values...
+  createInfo.mipLodBias       = 0.0f;
+  createInfo.minLod           = 0.0f;
+  createInfo.maxLod           = 0.0f;
+
+  if (vkCreateSampler(this->mGraphicsDevice, &createInfo, nullptr, &this->mTextureSampler)
+      != VK_SUCCESS)
+  { throw std::runtime_error("Failed to create texture sampler."); }
+}
+
 void MVulkanRenderer::CreateVertexBuffer()
 {
   const VkDeviceSize bufferSize = sizeof(sTempVertices[0]) * sTempVertices.size();
@@ -1577,9 +1837,11 @@ void MVulkanRenderer::CreateUniformBuffers()
 void MVulkanRenderer::CreateDescriptorPool()
 {
   // 
-  VkDescriptorPoolSize poolSize;
-  poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-  poolSize.descriptorCount = static_cast<TU32>(this->mSwapChainImages.size());
+  std::array<VkDescriptorPoolSize, 2> poolSizes = {};
+  poolSizes[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  poolSizes[0].descriptorCount = static_cast<TU32>(this->mSwapChainImages.size());
+  poolSizes[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+  poolSizes[1].descriptorCount = static_cast<TU32>(this->mSwapChainImages.size());
 
   // Structure specifying paramters of a newly created descriptor pool.
   // The structrue has an ooptional flag similar to command pools that determines if individual
@@ -1589,8 +1851,8 @@ void MVulkanRenderer::CreateDescriptorPool()
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkDescriptorPoolCreateInfo.html
   VkDescriptorPoolCreateInfo poolInfo = {};
   poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-  poolInfo.poolSizeCount = 1;
-  poolInfo.pPoolSizes = &poolSize;
+  poolInfo.poolSizeCount = 2;
+  poolInfo.pPoolSizes = poolSizes.data();
   poolInfo.maxSets = static_cast<TU32>(this->mSwapChainImages.size());;
 
   if (vkCreateDescriptorPool(this->mGraphicsDevice, &poolInfo, nullptr, &this->mDescriptorPool)
@@ -1631,30 +1893,43 @@ void MVulkanRenderer::CreateDescriptorSets()
   // We need to update all descriptor sets to be accessed by each buffer of swapchain.
   for (size_t i = 0; i < this->mSwapChainImages.size(); ++i)
   {
-    VkWriteDescriptorSet descriptorWrite = {};
-    descriptorWrite.sType   = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    descriptorWrite.dstSet  = this->mDescriptorSets[i];
-    // We gave our uniform buffer binding index to 0. 
-    // Caution, descriptors can be arrays so we need to specify the first index in the descripor array.
-    descriptorWrite.dstBinding      = 0;
-    descriptorWrite.dstArrayElement = 0;
-    // Set buffer type and descriptor count.
-    descriptorWrite.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    descriptorWrite.descriptorCount = 1;
-
-    //
+    // Descriptor for UBO
     VkDescriptorBufferInfo bufferInfo = {};
     bufferInfo.buffer = sUniformBufferObjects[i];
     bufferInfo.offset = 0;
     bufferInfo.range  = sizeof(dy::UUniformBufferObject);
 
-    descriptorWrite.pBufferInfo     = &bufferInfo;
-    descriptorWrite.pImageInfo        = nullptr;
-    descriptorWrite.pTexelBufferView  = nullptr;
+    // Descriptor for Sampler Texture (COMBINED_IMAGE_TO_SAMPLER)
+    VkDescriptorImageInfo samplerInfo = {};
+    samplerInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    samplerInfo.imageView   = this->mTextureImageView;
+    samplerInfo.sampler     = this->mTextureSampler;
+
+    std::array<VkWriteDescriptorSet, 2> descriptorWrites = {};
+    descriptorWrites[0].sType   = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[0].dstSet  = this->mDescriptorSets[i];
+    // We gave our uniform buffer binding index to 0. 
+    // Caution, descriptors can be arrays so we need to specify the first index in the descripor array.
+    descriptorWrites[0].dstBinding      = 0;
+    descriptorWrites[0].dstArrayElement = 0;
+    // Set buffer type and descriptor count.
+    descriptorWrites[0].descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrites[0].descriptorCount = 1;
+    descriptorWrites[0].pBufferInfo     = &bufferInfo;
+    descriptorWrites[0].pImageInfo        = nullptr;
+    descriptorWrites[0].pTexelBufferView  = nullptr;
+
+    descriptorWrites[1].sType   = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrites[1].dstSet  = this->mDescriptorSets[i];
+    descriptorWrites[1].dstBinding      = 1;
+    descriptorWrites[1].dstArrayElement = 0;
+    descriptorWrites[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    descriptorWrites[1].descriptorCount = 1;
+    descriptorWrites[1].pImageInfo      = &samplerInfo;
 
     // Update the contents of a descriptor set object.
     // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkUpdateDescriptorSets.html
-    vkUpdateDescriptorSets(this->mGraphicsDevice, 1, &descriptorWrite, 0, nullptr);
+    vkUpdateDescriptorSets(this->mGraphicsDevice, 2, descriptorWrites.data(), 0, nullptr);
   }
 }
 
@@ -1762,22 +2037,8 @@ void MVulkanRenderer::CopyBuffer(VkBuffer inSourceBuffer, VkDeviceSize inSize, V
 {
   // (1) To copy buffer from SRC_BIT to DST_BIT buffer,
   // we need to command buffer for copying buffer to buffer.
-  VkCommandBufferAllocateInfo allocateInfo = {};
-  allocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-  allocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-  allocateInfo.commandPool = this->mCommandPool; // Specify command pool to insert a buffer.
-  allocateInfo.commandBufferCount = 1;
-
-  VkCommandBuffer commandBuffer; // Create buffer.
-  vkAllocateCommandBuffers(this->mGraphicsDevice, &allocateInfo, &commandBuffer);
-
-  // (2) Fill record information.
-  VkCommandBufferBeginInfo beginInfo = {};
-  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  // Because we're only going to use the command buffer once and
-  // wait with returning from the function until the copy operation has finisehd executing.
-  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-  vkBeginCommandBuffer(commandBuffer, &beginInfo);
+  // Create buffer.
+  const VkCommandBuffer commandBuffer = this->BeginSingleTimeCommands(); 
 
   VkBufferCopy copyRegion;
   copyRegion.srcOffset = 0;
@@ -1785,19 +2046,76 @@ void MVulkanRenderer::CopyBuffer(VkBuffer inSourceBuffer, VkDeviceSize inSize, V
   copyRegion.size = inSize;
   vkCmdCopyBuffer(commandBuffer, inSourceBuffer, outDestBuffer, 1, &copyRegion);
 
-  vkEndCommandBuffer(commandBuffer);
+  this->EndSingleTimeCommands(commandBuffer);
+}
 
-  // (3) Submit command pool and wait (ONE_TIME_SUBMIT_BIT) to end the operation.
+void MVulkanRenderer::CopyBufferToImage(VkBuffer iBuffer, VkImage iImage, TU32 iWidth, TU32 iHeight)
+{
+  VkCommandBuffer commandBuffer = this->BeginSingleTimeCommands();
+
+  // like a buffer copy, need to specify which part of the buffer is going to be copied
+  // to which part of the image.
+  VkBufferImageCopy region;
+  region.bufferOffset       = 0;
+  region.bufferRowLength    = 0;
+  region.bufferImageHeight  = 0;
+
+  VkImageSubresourceLayers imageSubresource;
+  imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+  imageSubresource.mipLevel       = 0;
+  imageSubresource.baseArrayLayer = 0;
+  imageSubresource.layerCount     = 1;
+  region.imageSubresource = imageSubresource;
+  region.imageOffset = {0, 0, 0};
+  region.imageExtent = {iWidth, iHeight, 1};
+
+  // The fourth parameter indicates which layout the image is currently using.
+  // VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL
+  // ...I'm assuming here that the image has already been transitioned 
+  // to the layout that is optimal for copying pixels to...
+  //
+  // It's possible to specify an array of below function to perform many different copies
+  // from this buffers.
+  // https://www.khronos.org/registry/vulkan/specs/1.0/man/html/VkBufferImageCopy.html
+  vkCmdCopyBufferToImage(
+      commandBuffer, iBuffer, iImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+      1, &region);
+
+  EndSingleTimeCommands(commandBuffer);
+}
+
+VkCommandBuffer MVulkanRenderer::BeginSingleTimeCommands()
+{
+  VkCommandBufferAllocateInfo allocInfo = {};
+  allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  allocInfo.commandPool = this->mCommandPool;
+  allocInfo.commandBufferCount = 1;
+
+  VkCommandBuffer commandBuffer;
+  vkAllocateCommandBuffers(this->mGraphicsDevice, &allocInfo, &commandBuffer);
+
+  VkCommandBufferBeginInfo beginInfo = {};
+  beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+  vkBeginCommandBuffer(commandBuffer, &beginInfo);
+  return commandBuffer;
+}
+
+void MVulkanRenderer::EndSingleTimeCommands(VkCommandBuffer iValidCommandBuffer)
+{
+  vkEndCommandBuffer(iValidCommandBuffer);
+
   VkSubmitInfo submitInfo = {};
   submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
   submitInfo.commandBufferCount = 1;
-  submitInfo.pCommandBuffers = &commandBuffer;
+  submitInfo.pCommandBuffers = &iValidCommandBuffer;
 
   vkQueueSubmit(this->mGraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
   vkQueueWaitIdle(this->mGraphicsQueue);
 
-  // (4) Must free command buffer also.
-  vkFreeCommandBuffers(this->mGraphicsDevice, this->mCommandPool, 1, &commandBuffer);
+  vkFreeCommandBuffers(this->mGraphicsDevice, this->mCommandPool, 1, &iValidCommandBuffer);
 }
 
 void MVulkanRenderer::RecreateSwapChain()
@@ -1862,6 +2180,11 @@ void MVulkanRenderer::CleanUp()
   // To synchronize drawFrame functions, this function must be called.
   vkDeviceWaitIdle(this->mGraphicsDevice);
   this->CleanupSwapChain();
+
+  vkDestroySampler(this->mGraphicsDevice, this->mTextureSampler, nullptr);
+  vkDestroyImageView(this->mGraphicsDevice, this->mTextureImageView, nullptr);
+  vkFreeMemory(this->mGraphicsDevice, this->mTextureImageMemory, nullptr);
+  vkDestroyImage(this->mGraphicsDevice, this->mTextureImage, nullptr);
   
   vkDestroyDescriptorPool(this->mGraphicsDevice, this->mDescriptorPool, nullptr);
 

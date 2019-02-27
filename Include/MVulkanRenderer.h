@@ -219,6 +219,45 @@ private:
   /// Created semaphores must be destroyed explicitly.
   void CreateDefaultSemaphores();
 
+  /// @brief Create texture image.
+  ///
+  /// We've seen before, with the swap chain images and the framebuffer, that images are accessed
+  /// through image views rather than directly.
+  /// We will also need to create such an image view for the texture image.
+  void CreateTextureImage();
+  /// @brief
+  void CreateImage(
+      TU32 iWidth, TU32 iHeight, VkFormat iFormat, VkImageTiling iTiling,
+      VkImageUsageFlags iUsage, VkMemoryPropertyFlags iProperties,
+      VkImage& outImage, VkDeviceMemory& outImageMemory);
+  /// @brief Handle layout transition.
+  /// When copy buffer to image, we must check the image (destination) to be in the
+  /// right layout first.
+  ///
+  /// @param iOldLayout the old layout in an image layout transition.
+  /// @param iNewLayout the new layout in an image layout tarnsition.
+  /// @link https://www.khronos.org/registry/vulkan/specs/1.1-extensions/html/vkspec.html#synchronization-image-layout-transitions
+  void TransitImageLayout(
+      VkImage iImage, VkFormat iFormat, 
+      VkImageLayout iOldLayout, VkImageLayout iNewLayout);
+
+  /// @brief Create texture image view for accessing texture image.
+  void CreateTextureImageView();
+  /// @brief Create image view with image and given format.
+  MCR_NODISCARD VkImageView CreateImageView(VkImage iImage, VkFormat iFormat);
+
+  /// @brief Create samplers for texture to access following special way,
+  /// such as GL_REPEAT, Bilinear filtering, Anisotroic, etc...
+  ///
+  /// in Vulkan, textures are usually accessed through samplers, which will apply filtering
+  /// said above and transformation to compute the fianl color that is retrieved.
+  /// Oversampling is the program that happened when more geometries are assigned per one texel.
+  /// Undersampling is vice versa.
+  ///
+  /// Using sampler with filtering, we can avoid oversampling & undersampling.
+  /// And we can also determine how to read outside texel using `Addressing mode`.
+  void CreateTextureSampler();
+
   /// @brief Create vertex buffers. 
   ///
   /// Buffers in Vulkan (not builtin) are storing arbitary (important!) data that can be
@@ -264,6 +303,13 @@ private:
   /// Memory transfer operations are executed usig command buffers, like a drawing commands.
   /// So, we have to allocate command buffer first, 
   void CopyBuffer(VkBuffer inSourceBuffer, VkDeviceSize inSize, VkBuffer outDestBuffer);
+  /// @brief Copy buffer to image. Before calling this function, 
+  /// image must be transited to appropriate layout.
+  void CopyBufferToImage(VkBuffer iBuffer, VkImage iImage, TU32 iWidth, TU32 iHeight);
+  /// @brief
+  MCR_NODISCARD VkCommandBuffer BeginSingleTimeCommands();
+  /// @brief
+  void EndSingleTimeCommands(VkCommandBuffer iValidCommandBuffer);
 
   /// @brief Recreate swap chain when window property was changed.
   /// Created swap chain is no longer compatible with it because 
@@ -340,6 +386,13 @@ public:
   static constexpr TI32     kMaxFramesInFlight = 2;
   /// @brief Defines frame index for managing vulkan semaphores.
   size_t                    mCurrentRenderFrame = 0;
+
+  VkImage         mTextureImage;
+  VkDeviceMemory  mTextureImageMemory;
+  /// @brief
+  VkImageView     mTextureImageView;
+  /// @brief
+  VkSampler       mTextureSampler;
 
   /// @brief
   bool mIsWindowResizeDirty = false;

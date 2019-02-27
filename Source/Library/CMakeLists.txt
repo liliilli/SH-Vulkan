@@ -11,14 +11,4 @@
 # SOFTWARE.
 #
 cmake_minimum_required (VERSION 3.8)
-
-# Include sub-projects.
-add_subdirectory (Temp)
-add_subdirectory (Type)
-add_subdirectory (Library)
-
-file(GLOB NEU_SOURCE_FILES *.cpp)
-add_library(Source STATIC ${NEU_SOURCE_FILES})
-target_link_libraries(Source Source_Temp)
-target_link_libraries(Source Source_Type)
-target_link_libraries(Source Source_Library)
+add_library(Source_Library STATIC DImageBuffer.cpp)

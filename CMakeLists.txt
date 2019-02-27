@@ -43,6 +43,7 @@ include_directories(C:\\TPLibraries\\glfw-3.2.1\\include)
 include_directories(C:\\VulkanSDK\\1.1.85.0\\Include)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}\\Library\\glm)
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}\\Library\\fmt\\Include)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}\\Library\\stb)
 
 # Include sub-projects.
 add_subdirectory (Source)
@@ -68,12 +69,20 @@ find_library(
   NAMES vulkan-1.lib
   HINTS ${VULKAN_LIB_PATH}
   REQUIRED)
-    
-find_library(
-  FMT
-  NAMES fmtd.lib
-  HINTS ${FMT_LIB_PATH}
-  REQUIRED)
+   
+if (${CMAKE_BUILD_TYPE} STREQUAL Debug)
+  find_library(
+	FMT
+	NAMES fmtd.lib
+	HINTS ${FMT_LIB_PATH}
+	REQUIRED)
+else()
+  find_library(
+	FMT
+	NAMES fmt.lib
+	HINTS ${FMT_LIB_PATH}
+	REQUIRED)
+endif()
 
 target_link_libraries(VulkanSandbox ${FMT})
 target_link_libraries(VulkanSandbox ${GLFW3})

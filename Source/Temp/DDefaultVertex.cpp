@@ -42,7 +42,7 @@ std::vector<VkVertexInputAttributeDescription>& DDefaultVertex::GetAttributeDesc
   static bool isFilled = false;
   if (isFilled == false)
   {
-    attributeDescription.resize(2);
+    attributeDescription.resize(3);
     // the binding number which this attribute takes its data from.
     attributeDescription[0].binding   = 0;
     attributeDescription[0].location  = 0;
@@ -51,8 +51,13 @@ std::vector<VkVertexInputAttributeDescription>& DDefaultVertex::GetAttributeDesc
 
     attributeDescription[1].binding   = 0;
     attributeDescription[1].location  = 1;
-    attributeDescription[1].format    = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attributeDescription[1].format    = VK_FORMAT_R32G32B32_SFLOAT;
     attributeDescription[1].offset    = offsetof(DDefaultVertex, mBaseColor);
+    
+    attributeDescription[2].binding   = 0;
+    attributeDescription[2].location  = 2;
+    attributeDescription[2].format    = VK_FORMAT_R32G32_SFLOAT;
+    attributeDescription[2].offset    = offsetof(DDefaultVertex, mTextureUv0);
     isFilled = true;
   }
 

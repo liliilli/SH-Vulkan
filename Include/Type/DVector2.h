@@ -28,7 +28,7 @@ struct DVector2 final
 {
   union 
   { 
-    struct { float X = 0.0f; float Y = 0.0f; }; 
+    struct { float X; float Y; }; 
   };
 
   DVector2() = default;

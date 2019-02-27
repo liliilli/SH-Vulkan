@@ -3,7 +3,10 @@
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec3 inBaseColor;
+layout(location = 2) in vec2 inTextureUv0;
+
 layout(location = 0) out vec3 fragColor;
+layout(location = 1) out vec2 textureUv0;
 
 layout(binding = 0) uniform DyUniformBufferObject 
 {
@@ -18,4 +21,5 @@ void main()
 {
     gl_Position = DyGetPVM() * vec4(inPosition, 1.0);
     fragColor = inBaseColor;
+	textureUv0 = inTextureUv0;
 }

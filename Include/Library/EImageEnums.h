@@ -12,25 +12,18 @@
 /// SOFTWARE.
 ///
 
-#include <vector>
-#include "Type/DVector3.h"
-#include "Type/DVector2.h"
-#include "ASystemInclude.h"
-
 namespace dy
 {
 
-struct DDefaultVertex final
+/// @enum EImageColorFormatStyle
+/// @brief Image color format which is a type of each pixel data.
+enum class EImageColorFormatStyle
 {
-  DVector3 mPosition;
-  DVector3 mBaseColor;
-  DVector2 mTextureUv0;
-  
-  /// @brief Get overall vertex structure binding descriptor for Vulkan.
-  [[nodiscard]] static VkVertexInputBindingDescription& GetBindingDescription();
-
-  /// @brief Get per attribute structure binding descriptor for Vulkan.
-  [[nodiscard]] static std::vector<VkVertexInputAttributeDescription>& GetAttributeDescriptons();;
+  NoneError,  // Do not use this.
+  R,          // Red-Green 8bit unsigned.
+  RG,         // Red-Green 8bit unsigned.
+  RGB,        // Red-Green-Blue 8bit unsigned.
+  RGBA        // Red-Green-Blue and alpha 8bit unsigned.
 };
 
 } /// ::dy namespace
