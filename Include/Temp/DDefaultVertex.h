@@ -31,6 +31,26 @@ struct DDefaultVertex final
 
   /// @brief Get per attribute structure binding descriptor for Vulkan.
   [[nodiscard]] static std::vector<VkVertexInputAttributeDescription>& GetAttributeDescriptons();;
+
+  bool operator==(const DDefaultVertex& other) const noexcept
+  {
+    return this->mPosition == other.mPosition
+        && this->mBaseColor == other.mBaseColor
+        && this->mTextureUv0 == other.mTextureUv0;
+  }
 };
 
 } /// ::dy namespace
+
+namespace std
+{
+  template <> struct hash<dy::DDefaultVertex>
+  {
+    size_t operator()(const dy::DDefaultVertex& vertex) const 
+    {
+      return ((hash<dy::DVector3>()(vertex.mPosition) 
+            ^ (hash<dy::DVector3>()(vertex.mBaseColor) << 1)) >> 1)
+        ^ (hash<dy::DVector2>()(vertex.mTextureUv0) << 1);
+    }
+  };
+}

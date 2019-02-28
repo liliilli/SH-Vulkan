@@ -275,6 +275,8 @@ private:
   /// And we can also determine how to read outside texel using `Addressing mode`.
   void CreateTextureSampler();
 
+  /// @brief Load model.
+  void LoadModel(const std::string& iModelPath);
   /// @brief Create vertex buffers. 
   ///
   /// Buffers in Vulkan (not builtin) are storing arbitary (important!) data that can be

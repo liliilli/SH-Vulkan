@@ -251,4 +251,17 @@ static_assert(sizeof(DVector3) == 12, "Test failed");
 
 } /// ::dy namespace
 
+namespace std
+{
+  template <> struct hash<dy::DVector3>
+  {
+    size_t operator()(const dy::DVector3& vertex) const 
+    {
+      return ((hash<float>()(vertex.X) 
+            ^ (hash<float>()(vertex.Y) << 1)) >> 1)
+        ^ (hash<float>()(vertex.Z) << 1);
+    }
+  };
+}
+
 #endif /// GUARD_DY_HELPER_TYPE_VECTOR3_H

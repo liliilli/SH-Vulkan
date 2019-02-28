@@ -232,4 +232,16 @@ static_assert(sizeof(DVector2) == 8, "Test failed");
 
 } /// ::dy namespace
 
+namespace std
+{
+  template <> struct hash<dy::DVector2>
+  {
+    size_t operator()(const dy::DVector2& vertex) const 
+    {
+      return ((hash<float>()(vertex.X) 
+            ^ (hash<float>()(vertex.Y) << 1)) >> 1);
+    }
+  };
+}
+
 #endif /// GUARD_DY_HELPER_TYPE_VECTOR2_H

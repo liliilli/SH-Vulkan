@@ -27,15 +27,14 @@
 #define GLM_FORCE_RADIANS
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <tiny_obj_loader.h>
 #include "Library/DImageBuffer.h"
+#include <sstream>
 
 namespace
 {
 
-const std::vector<const char*> validationLayers =
-{
-  "VK_LAYER_LUNARG_standard_validation"
-};
+const std::vector<const char*> validationLayers = { "VK_LAYER_LUNARG_standard_validation" };
 
 /// ~Swap chain~
 /// Vulkan does not have the concept of a `Default Framebuffer` like OpenGL,
@@ -49,10 +48,7 @@ const std::vector<const char*> validationLayers =
 /// * Not all graphics cards are capable of presenting images directly to screen (such as server)
 /// * Image presentation is very tied to the window system and surface (VkSurfaceKHR)
 /// * It's not part of vulkan core. so have to enabled the `VK_KHR_swapchain` extension.
-const std::vector<const char*> sDeviceExtensions = 
-{
-  VK_KHR_SWAPCHAIN_EXTENSION_NAME
-};
+const std::vector<const char*> sDeviceExtensions = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 
 /// @brief Vulkan validation (LUNARG SDK) layer debug callback function. \n
 /// This function follows `PFN_vkDebugUtilsMessengerCallbackEXT` signature, \n
@@ -91,6 +87,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL VkDebugCallback(
   return VK_FALSE;
 }
 
+#ifdef false
 const std::vector<dy::DDefaultVertex> sTempVertices = {
     // Position,          // Color,
     {{0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.f, 0.f}},
@@ -116,12 +113,19 @@ const std::vector<TU32> sTempIndices = {
   ,
   8, 9,10,10,11, 8
 };
+#endif
+
+std::vector<dy::DDefaultVertex> sModelVertices = {};
+std::vector<TU32> sModelIndices = {};
 
 VkBuffer        sVertexBufferObject;
 VkDeviceMemory  sVertexBufferMemory;
 
 VkBuffer        sVertexElementObject;
 VkDeviceMemory  sVertexElementMemory;
+
+constexpr const char* kModelPath    = "../../Resource/chalet.obj";
+constexpr const char* kTexturePath  = "../../Resource/chalet.jpg";
 
 // + We should have multiple buffers, because multiple frames may be in flight at the same time!
 // and we don't want to update the buffer in presentation mode while a previous one is still reading
@@ -199,12 +203,14 @@ EDySuccess MVulkanRenderer::pfInitialize()
   this->CreateDefaultDepthResource();
   this->CreateFrameBuffer();
   //
+  this->LoadModel(kModelPath);
+  this->CreateVertexBuffer();
+  this->CreateIndiceBuffer();
+  //
   this->CreateTextureImage();
   this->CreateTextureImageView();
   this->CreateTextureSampler();
   //
-  this->CreateVertexBuffer();
-  this->CreateIndiceBuffer();
   this->CreateUniformBuffers();
   this->CreateDescriptorPool();
   this->CreateDescriptorSets();
@@ -1484,7 +1490,7 @@ void MVulkanRenderer::CreateCommandBuffers()
     // Draw!! (glDrawArrays)
     // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCmdDraw.html
     //vkCmdDraw(this->mCommandBuffers[i], static_cast<TU32>(sTempVertices.size()), 1, 0, 0);
-    vkCmdDrawIndexed(this->mCommandBuffers[i], static_cast<TU32>(sTempIndices.size()), 1, 0, 0, 0);
+    vkCmdDrawIndexed(this->mCommandBuffers[i], static_cast<TU32>(sModelIndices.size()), 1, 0, 0, 0);
 
     // Finish render pass. 
     vkCmdEndRenderPass(this->mCommandBuffers[i]);
@@ -1542,7 +1548,7 @@ void MVulkanRenderer::CreateTextureImage()
   VkDeviceMemory stagingBufferMemory;
   TU32 width, height;
   {
-    dy::DDyImageBinaryDataBuffer imageBuffer{"../../Resource/texture.jpg"};
+    dy::DDyImageBinaryDataBuffer imageBuffer{kTexturePath};
     MDY_ASSERT(imageBuffer.IsBufferCreatedProperly() == true);
 
     this->CreateBuffer(imageBuffer.GetBufferSize(), 
@@ -1832,9 +1838,52 @@ void MVulkanRenderer::CreateTextureSampler()
   { throw std::runtime_error("Failed to create texture sampler."); }
 }
 
+void MVulkanRenderer::LoadModel(const std::string& iModelPath)
+{
+  // In tiny_obj_loader, 
+  // attrib : specifies holds all of the position, normals and texture coordinates 
+  // in .vertices, .normal, .texcoords.
+  // shape : contains all of the separate object and their faces.
+  tinyobj::attrib_t attrib;
+  std::vector<tinyobj::shape_t> shapes;
+  std::vector<tinyobj::material_t> materials;
+  std::string warn, err;
+
+  if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, iModelPath.c_str()))
+  { throw std::runtime_error(warn + err); }
+
+  std::unordered_map<dy::DDefaultVertex, TU32> uniqueVertices = {};
+
+  for (const auto& shape : shapes)
+  {
+    for (const auto& index : shape.mesh.indices)
+    {
+      dy::DDefaultVertex vertex = {};
+      vertex.mPosition = dy::DVector3{
+        attrib.vertices[3 * index.vertex_index + 0],
+        attrib.vertices[3 * index.vertex_index + 1],
+        attrib.vertices[3 * index.vertex_index + 2],
+      };
+      vertex.mTextureUv0 = dy::DVector2{
+        attrib.texcoords[2 * index.texcoord_index + 0],
+        attrib.texcoords[2 * index.texcoord_index + 1],
+      };
+      vertex.mBaseColor = dy::DVector3{ 1, 1, 1 }; 
+
+      if (uniqueVertices.count(vertex) == 0)
+      {
+        uniqueVertices[vertex] = static_cast<TU32>(sModelVertices.size());
+        sModelVertices.emplace_back(vertex);
+      }
+
+      sModelIndices.emplace_back(uniqueVertices[vertex]);
+    }
+  }
+}
+
 void MVulkanRenderer::CreateVertexBuffer()
 {
-  const VkDeviceSize bufferSize = sizeof(sTempVertices[0]) * sTempVertices.size();
+  const VkDeviceSize bufferSize = sizeof(sModelVertices[0]) * sModelVertices.size();
 
   // (0) We're now going to use a host visible buffer (CPU) as temporary buffer to transfer buffer data
   // into Client buffer that only visible in GPU so as actual vertex buffer.
@@ -1868,7 +1917,7 @@ void MVulkanRenderer::CreateVertexBuffer()
   // 2. Call vkFlushMappedMemoryRanges to after writing to the mapped memory, 
   // and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkFlushMappedMemoryRanges.html
-  memcpy(data, sTempVertices.data(), static_cast<size_t>(bufferSize));
+  memcpy(data, sModelVertices.data(), static_cast<size_t>(bufferSize));
   vkUnmapMemory(this->mGraphicsDevice, stagingBufferMemory);
 
   // Flushing memory ranges or using a coherent memory heap means that 
@@ -1896,7 +1945,7 @@ void MVulkanRenderer::CreateVertexBuffer()
 
 void MVulkanRenderer::CreateIndiceBuffer()
 {
-  const VkDeviceSize bufferSize = sizeof(sTempIndices[0]) * sTempIndices.size();
+  const VkDeviceSize bufferSize = sizeof(sModelIndices[0]) * sModelIndices.size();
 
   // (0) We're now going to use a host visible buffer (CPU) as temporary buffer to transfer buffer data
   // into Client buffer that only visible in GPU so as actual vertex buffer.
@@ -1930,7 +1979,7 @@ void MVulkanRenderer::CreateIndiceBuffer()
   // 2. Call vkFlushMappedMemoryRanges to after writing to the mapped memory, 
   // and call vkInvalidateMappedMemoryRanges before reading from the mapped memory
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkFlushMappedMemoryRanges.html
-  memcpy(data, sTempIndices.data(), static_cast<size_t>(bufferSize));
+  memcpy(data, sModelIndices.data(), static_cast<size_t>(bufferSize));
   vkUnmapMemory(this->mGraphicsDevice, stagingBufferMemory);
 
   // Flushing memory ranges or using a coherent memory heap means that 
