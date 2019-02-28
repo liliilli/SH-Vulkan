@@ -182,6 +182,7 @@ EDySuccess MVulkanRenderer::pfInitialize()
   // we need to look for and select a graphics card in the system that supports the features we need.
   // In fact we can select any number of graphics card and use them stimutaneously.
   this->mPhysicalDevice = this->pPickPhysicalDevice(this->mInstance);
+  this->mMsaaSamples = this->GetMaxUsableSampleCount();
 
   // After selecting a physical device to use,
   // We need to set up a `Logical device` to interface with physical device from application layer.
@@ -201,6 +202,7 @@ EDySuccess MVulkanRenderer::pfInitialize()
   this->CreateGraphicsPipeline();
   //
   this->CreateCommandPool();
+  this->CreateDefaultColorResource();
   this->CreateDefaultDepthResource();
   this->CreateFrameBuffer();
   //
@@ -856,13 +858,35 @@ void MVulkanRenderer::CreateSwapChainImageViews()
   }
 }
 
+void MVulkanRenderer::CreateDefaultColorResource()
+{
+  VkFormat colorFormat = this->mSwapChainImageFormat;
+  this->CreateImage(
+      this->mSwapChainExtent.width, this->mSwapChainExtent.height, 1, 
+      colorFormat, VK_IMAGE_TILING_OPTIMAL, 
+      VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+      this->mMsaaSamples,
+      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      this->mColorImage, this->mColorImageMemory);
+
+  this->mColorImageView = 
+      this->CreateImageView(this->mColorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+
+  this->TransitImageLayout(
+      this->mColorImage, colorFormat,
+      VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, 1);
+}
+
 void MVulkanRenderer::CreateDefaultDepthResource()
 {
+  // We have to take care of depth when using multi-sampling on initial color attachment.
+  // We should use same msaa sample flag as used on color attachment.
   VkFormat optimalDepthFormat = this->FindDepthFormat();
   this->CreateImage(this->mSwapChainExtent.width, this->mSwapChainExtent.height, 1,
     optimalDepthFormat,
     VK_IMAGE_TILING_OPTIMAL,
     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+    this->mMsaaSamples,
     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
     this->mDepthImage,
     this->mDepthImageMemory);
@@ -935,7 +959,7 @@ void MVulkanRenderer::CreateRenderPass()
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkAttachmentDescription.html
   VkAttachmentDescription colorAttachment = {};
   colorAttachment.format  = this->mSwapChainImageFormat; // Format must be matched to swapchain image.
-  colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  colorAttachment.samples = this->mMsaaSamples;
   // Two option determine what to do with the data in the attachment before rendering and after rendering.
   // these options are applied to color and depth data.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkAttachmentLoadOp.html
@@ -950,7 +974,14 @@ void MVulkanRenderer::CreateRenderPass()
   // `finalLayout` specifies the layout to automatically transition to when the render pass finishes.
   // VkImageLayout : https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageLayout.html
   colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-  colorAttachment.finalLayout   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+  // When using multi-sampling color attachment, we must not specify it
+  // as PRESENT_SRC_KHR, but COLOT_ATTACHMENT_OPTIMAL.
+  // THAT'S BECAUSE MULTIPSAMPLED IMAGES CANNOT BE PRESENTED DIRECTLY.
+  // 
+  // So, we need to resolve them to a regular image that is presented by 
+  // swap-chain images of logic device.
+  // But, it does not apply to depth buffer unless depth buffer also to be presented in any time..
+  colorAttachment.finalLayout   = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
   // (2) Setup subpasses and attachment references
   // A single render pass can consist of `multiple subpass`, like a post-processing.
@@ -968,7 +999,7 @@ void MVulkanRenderer::CreateRenderPass()
   // (1-2) Make depth-stencil attachment information.
   VkAttachmentDescription depthAttachment = {};
   depthAttachment.format  = this->FindDepthFormat();
-  depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  depthAttachment.samples = this->mMsaaSamples;
   depthAttachment.loadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR;
   depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
   depthAttachment.stencilLoadOp   = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -980,15 +1011,32 @@ void MVulkanRenderer::CreateRenderPass()
   depthAttachmentRef.attachment = 1;
   depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+  // (1-3) We need resolve color attachment for resolving multi-sampled color attachment
+  // to 1-bit color attachment to be presented properly.
+  VkAttachmentDescription resolveAttachment = {};
+  resolveAttachment.format  = this->mSwapChainImageFormat; 
+  resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  resolveAttachment.loadOp  = VK_ATTACHMENT_LOAD_OP_DONT_CARE; 
+  resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  resolveAttachment.stencilLoadOp   = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  resolveAttachment.stencilStoreOp  = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  resolveAttachment.finalLayout   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+  VkAttachmentReference resolveAttachmentRef;
+  resolveAttachmentRef.attachment = 2;
+  resolveAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
   // (3) The subpass also should be described.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkSubpassDescription.html
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCmdBindPipeline.html
   VkSubpassDescription subpassDesc  = {};
   subpassDesc.pipelineBindPoint     = VK_PIPELINE_BIND_POINT_GRAPHICS; // We use this subpass as graphics.
   // layout(location = 0) out vec4 outColor
-  subpassDesc.colorAttachmentCount  = 1;
-  subpassDesc.pColorAttachments     = &colorAttachmentRef;
+  subpassDesc.colorAttachmentCount    = 1;
+  subpassDesc.pColorAttachments       = &colorAttachmentRef;
   subpassDesc.pDepthStencilAttachment = &depthAttachmentRef;
+  subpassDesc.pResolveAttachments     = &resolveAttachmentRef;
   
   // (4) Although subpass list are consists of one, there are implicit right before and right after
   // subpass.
@@ -1023,7 +1071,10 @@ void MVulkanRenderer::CreateRenderPass()
     | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
   // (5) Make Render pass handle instance.
-  std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+  std::array<VkAttachmentDescription, 3> attachments = 
+  {
+    colorAttachment, depthAttachment, resolveAttachment
+  };
   VkRenderPassCreateInfo renderPassInfo = {};
   renderPassInfo.sType            = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
   renderPassInfo.attachmentCount  = TU32(attachments.size());
@@ -1222,7 +1273,7 @@ void MVulkanRenderer::CreateFixedRenderPipeline(
   VkPipelineMultisampleStateCreateInfo multisampling = {};
   multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
   multisampling.sampleShadingEnable   = VK_FALSE;
-  multisampling.rasterizationSamples  = VK_SAMPLE_COUNT_1_BIT;
+  multisampling.rasterizationSamples  = this->mMsaaSamples;
   multisampling.minSampleShading      = 1.0f;     // Optional
   multisampling.pSampleMask           = nullptr;  // Optional
   multisampling.alphaToCoverageEnable = VK_FALSE; // Optional
@@ -1347,10 +1398,11 @@ void MVulkanRenderer::CreateFrameBuffer()
   // 
   for (size_t i = 0; i < this->mSwapChainImageViews.size(); ++i)
   {
-    std::array<VkImageView, 2> attachments = 
+    std::array<VkImageView, 3> attachments = 
     {
+      this->mColorImageView,
+      this->mDepthImageView,
       this->mSwapChainImageViews[i],
-      this->mDepthImageView
     };
 
     // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkFramebufferCreateInfo.html
@@ -1366,9 +1418,7 @@ void MVulkanRenderer::CreateFrameBuffer()
     if (vkCreateFramebuffer(this->mGraphicsDevice, &frameBufferInfo, 
         nullptr, &this->mSwapChainFrameBuffers[i])
         != VK_SUCCESS)
-    {
-      throw std::runtime_error("Failed to create framebuffer.");
-    }
+    { throw std::runtime_error("Failed to create framebuffer."); }
   }
 }
 
@@ -1573,6 +1623,7 @@ void MVulkanRenderer::CreateTextureImage()
   this->CreateImage(width, height, sRequireMipLevel,
       VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
       VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+      VK_SAMPLE_COUNT_1_BIT,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
       this->mTextureImage, this->mTextureImageMemory);
 
@@ -1604,7 +1655,7 @@ void MVulkanRenderer::CreateTextureImageView()
 void MVulkanRenderer::CreateImage(
     TU32 iWidth, TU32 iHeight, TU32 iMipLevels,
     VkFormat iFormat, VkImageTiling iTiling, 
-    VkImageUsageFlags iUsage, VkMemoryPropertyFlags iProperties, 
+    VkImageUsageFlags iUsage, VkSampleCountFlagBits iSamples, VkMemoryPropertyFlags iProperties, 
     VkImage& outImage, VkDeviceMemory& outImageMemory)
 {
   // (2) Fill image create info.
@@ -1632,7 +1683,7 @@ void MVulkanRenderer::CreateImage(
   createInfo.initialLayout  = VK_IMAGE_LAYOUT_UNDEFINED;
   createInfo.usage          = iUsage;
   createInfo.sharingMode    = VK_SHARING_MODE_EXCLUSIVE;
-  createInfo.samples        = VK_SAMPLE_COUNT_1_BIT;
+  createInfo.samples        = iSamples;
   // Some optional flags for images that are related to sparse images.
   createInfo.flags          = 0;
 
@@ -1745,6 +1796,15 @@ void MVulkanRenderer::TransitImageLayout(
     {
       barrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
     }
+  }
+  else if (iOldLayout == VK_IMAGE_LAYOUT_UNDEFINED
+       &&  iNewLayout == VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+  {
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    sourceStages      = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    destinationStages = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
   }
   else { throw std::invalid_argument("Unsupported layout transition."); }
 
@@ -1925,7 +1985,7 @@ void MVulkanRenderer::CreateTextureSampler()
   createInfo.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
   // Level of detail values...
   createInfo.mipLodBias       = 0.0f;
-  createInfo.minLod           = static_cast<TF32>(sRequireMipLevel) / 2;
+  createInfo.minLod           = 0.0f;
   createInfo.maxLod           = static_cast<TF32>(sRequireMipLevel);
 
   if (vkCreateSampler(this->mGraphicsDevice, &createInfo, nullptr, &this->mTextureSampler)
@@ -2424,6 +2484,7 @@ void MVulkanRenderer::RecreateSwapChain()
   this->CreateSwapChainImageViews();
   this->CreateRenderPass();
   this->CreateGraphicsPipeline();
+  this->CreateDefaultColorResource();
   this->CreateDefaultDepthResource();
   this->CreateFrameBuffer();
   this->CreateCommandBuffers();
@@ -2450,6 +2511,10 @@ void MVulkanRenderer::CleanupSwapChain()
   {
     vkDestroyImageView(this->mGraphicsDevice, imageView, nullptr);
   }
+
+  vkDestroyImageView(this->mGraphicsDevice, this->mColorImageView, nullptr);
+  vkDestroyImage(this->mGraphicsDevice, this->mColorImage, nullptr);
+  vkFreeMemory(this->mGraphicsDevice, this->mColorImageMemory, nullptr);
 
   vkDestroyImageView(this->mGraphicsDevice, this->mDepthImageView, nullptr);
   vkDestroyImage(this->mGraphicsDevice, this->mDepthImage, nullptr);
@@ -2523,6 +2588,24 @@ void MVulkanRenderer::CleanUp()
 
   glfwDestroyWindow(this->mGlfwWindow);
   glfwTerminate();
+}
+
+VkSampleCountFlagBits MVulkanRenderer::GetMaxUsableSampleCount()
+{
+  VkPhysicalDeviceProperties physicalDeviceProperties;
+  vkGetPhysicalDeviceProperties(this->mPhysicalDevice, &physicalDeviceProperties);
+
+  VkSampleCountFlags count = std::min(
+      physicalDeviceProperties.limits.framebufferColorSampleCounts,
+      physicalDeviceProperties.limits.framebufferDepthSampleCounts);
+  if (count & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+  if (count & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+  if (count & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+  if (count & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+  if (count & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+  if (count & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+
+  return VK_SAMPLE_COUNT_1_BIT;
 }
 
 void MVulkanRenderer::DrawFrame()

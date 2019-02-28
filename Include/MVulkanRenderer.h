@@ -152,6 +152,9 @@ private:
   /// such as 2D texure depth texture, color texture, or etc.
   void CreateSwapChainImageViews();
 
+  /// @brief Create default color resource that supports multi-sampling.
+  /// 
+  void CreateDefaultColorResource();
   /// @brief We need to also specify and create VkImage, VkMem, VkImageView for depth attachment.
   /// and created resource will be attached when creating render pass of graphics rendering.
   ///
@@ -239,10 +242,10 @@ private:
   /// through image views rather than directly.
   /// We will also need to create such an image view for the texture image.
   void CreateTextureImage();
-  /// @brief
+  /// @brief Create arbitary image and device memory for image.
   void CreateImage(
       TU32 iWidth, TU32 iHeight, TU32 iMipLevels, VkFormat iFormat, VkImageTiling iTiling,
-      VkImageUsageFlags iUsage, VkMemoryPropertyFlags iProperties,
+      VkImageUsageFlags iUsage, VkSampleCountFlagBits iSamples, VkMemoryPropertyFlags iProperties,
       VkImage& outImage, VkDeviceMemory& outImageMemory);
   /// @brief Handle layout transition.
   /// When copy buffer to image, we must check the image (destination) to be in the
@@ -377,6 +380,11 @@ public:
   VkFormat       mSwapChainImageFormat;
   /// @brief
   VkExtent2D     mSwapChainExtent;
+
+  VkImage         mColorImage;
+  VkDeviceMemory  mColorImageMemory;
+  VkImageView     mColorImageView;
+
   /// @brief The handles of the VkImages of valid mSwapChain.
   std::vector<VkImage>     mSwapChainImages;
   /// @brief The view handle for viewing VkImage handle list of valid mSwapChain.
@@ -439,4 +447,9 @@ public:
 
   /// @brief
   bool mIsWindowResizeDirty = false;
+
+  /// @brief Check hardware and get usable max sample counts to be used in MSAA.
+  MCR_NODISCARD VkSampleCountFlagBits GetMaxUsableSampleCount();
+  /// @brief
+  VkSampleCountFlagBits mMsaaSamples = VK_SAMPLE_COUNT_1_BIT;
 };
