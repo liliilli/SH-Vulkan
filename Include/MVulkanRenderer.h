@@ -241,7 +241,7 @@ private:
   void CreateTextureImage();
   /// @brief
   void CreateImage(
-      TU32 iWidth, TU32 iHeight, VkFormat iFormat, VkImageTiling iTiling,
+      TU32 iWidth, TU32 iHeight, TU32 iMipLevels, VkFormat iFormat, VkImageTiling iTiling,
       VkImageUsageFlags iUsage, VkMemoryPropertyFlags iProperties,
       VkImage& outImage, VkDeviceMemory& outImageMemory);
   /// @brief Handle layout transition.
@@ -253,7 +253,27 @@ private:
   /// @link https://www.khronos.org/registry/vulkan/specs/1.1-extensions/html/vkspec.html#synchronization-image-layout-transitions
   void TransitImageLayout(
       VkImage iImage, VkFormat iFormat, 
-      VkImageLayout iOldLayout, VkImageLayout iNewLayout);
+      VkImageLayout iOldLayout, VkImageLayout iNewLayout, TU32 iRequireMipLevel);
+  /// @brief Create mipmap with given requiredMipLevel. 
+  ///
+  /// when digging down into more mip-mapped level, width and height will be halved by 2.
+  /// When calling this function, VkImage iImage layout must be specified as
+  /// VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT usage.
+  ///
+  /// This function call `vkCmdBlitImage` to blit image with scaling and filtering.
+  /// But, this function is not guaranteed to be supported on all platforms.
+  /// It requires the texture image format we use to SUPPORT LINEAR FILTERING.
+  /// If you input iPreferredFormat, we check we can blit images.
+  ///
+  /// If we can not create mipmaps because format do not support linear filtering,
+  /// We have to handle it alternatively such as software way or finding alternative
+  /// mipmappable format.
+  ///
+  /// It should be noted that it's uncommon in practice to generate the mipmap levels at runtime.
+  /// Usually they are pregenerated and stored in the texture file.
+  void GenerateMipmaps(
+      VkImage iImage, VkFormat iPreferredFormat, 
+      TU32 iWidth, TU32 iHeight, TU32 iRequiredMipLevel);
 
   /// @brief Create texture image view for accessing texture image.
   void CreateTextureImageView();
@@ -261,7 +281,8 @@ private:
   MCR_NODISCARD VkImageView CreateImageView(    
       VkImage iImage, 
       VkFormat iFormat, 
-      VkImageAspectFlagBits iAspectMaskFlag);
+      VkImageAspectFlagBits iAspectMaskFlag,
+      TU32 iRequireMipLevel);
 
   /// @brief Create samplers for texture to access following special way,
   /// such as GL_REPEAT, Bilinear filtering, Anisotroic, etc...

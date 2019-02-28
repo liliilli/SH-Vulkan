@@ -126,6 +126,7 @@ VkDeviceMemory  sVertexElementMemory;
 
 constexpr const char* kModelPath    = "../../Resource/chalet.obj";
 constexpr const char* kTexturePath  = "../../Resource/chalet.jpg";
+TU32 sRequireMipLevel = 1;
 
 // + We should have multiple buffers, because multiple frames may be in flight at the same time!
 // and we don't want to update the buffer in presentation mode while a previous one is still reading
@@ -850,7 +851,7 @@ void MVulkanRenderer::CreateSwapChainImageViews()
     this->mSwapChainImageViews[imageId] = this->CreateImageView(
         this->mSwapChainImages[imageId],
         this->mSwapChainImageFormat,
-        VK_IMAGE_ASPECT_COLOR_BIT
+        VK_IMAGE_ASPECT_COLOR_BIT, 1
     );
   }
 }
@@ -858,7 +859,7 @@ void MVulkanRenderer::CreateSwapChainImageViews()
 void MVulkanRenderer::CreateDefaultDepthResource()
 {
   VkFormat optimalDepthFormat = this->FindDepthFormat();
-  this->CreateImage(this->mSwapChainExtent.width, this->mSwapChainExtent.height,
+  this->CreateImage(this->mSwapChainExtent.width, this->mSwapChainExtent.height, 1,
     optimalDepthFormat,
     VK_IMAGE_TILING_OPTIMAL,
     VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
@@ -867,14 +868,14 @@ void MVulkanRenderer::CreateDefaultDepthResource()
     this->mDepthImageMemory);
 
   this->mDepthImageView = this->CreateImageView(
-      this->mDepthImage, optimalDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+      this->mDepthImage, optimalDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
   
   // We don't need staging buffer but need to be transitted to a layout that is
   // suitable for depth attachment usage.
   this->TransitImageLayout(this->mDepthImage, 
       optimalDepthFormat, 
       VK_IMAGE_LAYOUT_UNDEFINED,
-      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, 1);
 }
 
 VkFormat MVulkanRenderer::FindDepthFormat()
@@ -1568,9 +1569,10 @@ void MVulkanRenderer::CreateTextureImage()
   // (2) Create image create info.
   // Created image `this->mTextureImage` was created with VK_IMAGE_LAYOUT_UNDEFINED,
   // so we need transit it to VK_IMAGE_USAGE_TRANSFER_DST_BIT.
-  this->CreateImage(width, height, 
+  sRequireMipLevel = static_cast<TU32>(std::floor(std::log2(std::max(width, height)))) + 1;
+  this->CreateImage(width, height, sRequireMipLevel,
       VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_TILING_OPTIMAL,
-      VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
       this->mTextureImage, this->mTextureImageMemory);
 
@@ -1578,41 +1580,42 @@ void MVulkanRenderer::CreateTextureImage()
   // But we can transit to this to DST, because we don't care about created image buffer contents.
   this->TransitImageLayout(
       this->mTextureImage, 
-      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+      VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 
+      sRequireMipLevel);
   this->CopyBufferToImage(stagingBuffer, this->mTextureImage, width, height);
 
   // We also need to transit DST_LAYOUT image to SHADER_READ_ONLY
   // because we let it be able to be readen from shader access.
-  this->TransitImageLayout(
-      this->mTextureImage,
-      VK_FORMAT_R8G8B8A8_UNORM, 
-      VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
   vkFreeMemory(this->mGraphicsDevice, stagingBufferMemory, nullptr);
   vkDestroyBuffer(this->mGraphicsDevice, stagingBuffer, nullptr);
+
+  // We don't need to transit each mipmap's layout to SHADER_READ_BIT because
+  // This function will do transition command to each texture maps.
+  this->GenerateMipmaps(this->mTextureImage, VK_FORMAT_R8G8B8A8_UNORM, width, height, sRequireMipLevel);
 }
 
 void MVulkanRenderer::CreateTextureImageView()
 {
   // That's it!
   this->mTextureImageView = this->CreateImageView(
-      this->mTextureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
+      this->mTextureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT, sRequireMipLevel);
 }
 
 void MVulkanRenderer::CreateImage(
-    TU32 iWidth, TU32 iHeight, 
+    TU32 iWidth, TU32 iHeight, TU32 iMipLevels,
     VkFormat iFormat, VkImageTiling iTiling, 
     VkImageUsageFlags iUsage, VkMemoryPropertyFlags iProperties, 
     VkImage& outImage, VkDeviceMemory& outImageMemory)
 {
-// (2) Fill image create info.
+  // (2) Fill image create info.
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageCreateInfo.html
   VkImageCreateInfo createInfo = {};
   createInfo.sType          = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   createInfo.imageType      = VK_IMAGE_TYPE_2D;
   createInfo.extent.width   = iWidth;
   createInfo.extent.height  = iHeight;
   createInfo.extent.depth   = 1; // Depth must be larger than 0 because it just sspecifies dimensions.
-  createInfo.mipLevels      = 1;
+  createInfo.mipLevels      = iMipLevels;
   createInfo.arrayLayers    = 1;
   // We should use the same format for the texels as the pixels in the buffer.
   // Actually, we should check this format is supported by hardward.
@@ -1660,7 +1663,7 @@ void MVulkanRenderer::CreateImage(
 
 void MVulkanRenderer::TransitImageLayout(
     VkImage iImage, [[maybe_unused]] VkFormat iFormat, 
-    VkImageLayout iOldLayout, VkImageLayout iNewLayout)
+    VkImageLayout iOldLayout, VkImageLayout iNewLayout, TU32 iRequireMipLevel)
 {
   // Create one time command buffer (stop-the-world)
   VkCommandBuffer commandBuffer = this->BeginSingleTimeCommands();
@@ -1684,7 +1687,7 @@ void MVulkanRenderer::TransitImageLayout(
   barrier.image = iImage,
   barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
   barrier.subresourceRange.baseMipLevel = 0;
-  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.levelCount = iRequireMipLevel;
   barrier.subresourceRange.baseArrayLayer = 0;
   barrier.subresourceRange.layerCount = 1;
 
@@ -1764,10 +1767,104 @@ void MVulkanRenderer::TransitImageLayout(
   this->EndSingleTimeCommands(commandBuffer);
 }
 
+void MVulkanRenderer::GenerateMipmaps(
+    VkImage iImage, VkFormat iPreferredFormat, 
+    TU32 iWidth, TU32 iHeight, TU32 iRequiredMipLevel)
+{
+  // Check if image format supports linear blitting.
+  VkFormatProperties formatProperties;
+  vkGetPhysicalDeviceFormatProperties(this->mPhysicalDevice, iPreferredFormat, &formatProperties);
+  // We create a texture image with the optimal tiling format, so we need to check
+  // optimalTilingFeatures.
+  if ((formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)
+      == false)
+  { throw std::runtime_error("Texture image format does not support linear blitting."); }
+
+  VkCommandBuffer commandBuffer = this->BeginSingleTimeCommands();
+
+  VkImageMemoryBarrier barrier = {};
+  barrier.sType     = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+  barrier.image     = iImage,
+  barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  barrier.subresourceRange.levelCount = 1;
+  barrier.subresourceRange.baseArrayLayer = 0;
+  barrier.subresourceRange.layerCount = 1;
+ 
+  TU32 presentMipWidth  = iWidth;
+  TU32 presentMipHeight = iHeight;
+  for (TU32 i = 1; i < iRequiredMipLevel; ++i)
+  {
+    barrier.subresourceRange.baseMipLevel = i - 1;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+    // We should transit level[i-1] to VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL.
+    // This transition will wait for level [i-1] to be filled.
+    vkCmdPipelineBarrier(
+        commandBuffer, 
+        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    // If layout SRC_OPTIMAL set, we need to image [i-1] blit into DST_OPTIMAL as [i] level.
+    // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageBlit.html
+    VkImageBlit blit = {};
+    blit.srcOffsets[0] = {0, 0, 0};
+    blit.srcOffsets[1] = {static_cast<TI32>(presentMipWidth), static_cast<TI32>(presentMipHeight), 1};
+    blit.srcSubresource.aspectMask  = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.srcSubresource.mipLevel    = i - 1;
+    blit.srcSubresource.layerCount  = 1;
+    blit.dstOffsets[0] = {0, 0, 0};
+    blit.dstOffsets[1] = {presentMipWidth > 1 ? TI32(presentMipWidth / 2) : 1,
+                          presentMipHeight > 1 ? TI32(presentMipHeight / 2) : 1,
+                          1};
+    blit.dstSubresource.aspectMask      = VK_IMAGE_ASPECT_COLOR_BIT;
+    blit.dstSubresource.mipLevel        = i;
+    blit.dstSubresource.baseArrayLayer  = 0;
+    blit.dstSubresource.layerCount      = 1;
+
+    // Using vkCmdBlitImage, blit image to one-down-leveled mipmap (i-1 => i)
+    // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/vkCmdBlitImage.htmldd
+    // http://vulkan-spec-chunked.ahcox.com/ch18s05.html
+    vkCmdBlitImage(commandBuffer, 
+        iImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        iImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        1, &blit, VK_FILTER_LINEAR);
+
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    vkCmdPipelineBarrier(commandBuffer, 
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    if (presentMipWidth > 1)  { presentMipWidth /= 2; }
+    if (presentMipHeight > 1) { presentMipHeight /= 2; }
+  }
+
+  // We also need to transit DST_LAYOUT image to SHADER_READ_ONLY
+  // because we let it be able to be readen from shader access.
+  barrier.subresourceRange.baseMipLevel = iRequiredMipLevel - 1;
+  barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+  vkCmdPipelineBarrier(commandBuffer, 
+      VK_PIPELINE_STAGE_TRANSFER_BIT, 
+      VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+  this->EndSingleTimeCommands(commandBuffer);
+}
+
 VkImageView MVulkanRenderer::CreateImageView(
     VkImage iImage, 
     VkFormat iFormat, 
-    VkImageAspectFlagBits iAspectMaskFlag)
+    VkImageAspectFlagBits iAspectMaskFlag,
+    TU32 iRequireMipLevel)
 {
   // We also create VkImageView using VkImageViewCreateInfo and vkCreateImageView function.
   // VkImageViewCreateInfo : 
@@ -1790,7 +1887,7 @@ VkImageView MVulkanRenderer::CreateImageView(
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageAspectFlagBits.html
   createInfo.subresourceRange.aspectMask      = iAspectMaskFlag;
   createInfo.subresourceRange.baseMipLevel    = 0;
-  createInfo.subresourceRange.levelCount      = 1;
+  createInfo.subresourceRange.levelCount      = iRequireMipLevel;
   createInfo.subresourceRange.baseArrayLayer  = 0;
   createInfo.subresourceRange.layerCount      = 1;
 
@@ -1798,9 +1895,7 @@ VkImageView MVulkanRenderer::CreateImageView(
   VkImageView resultImageView;
   if (vkCreateImageView(this->mGraphicsDevice, &createInfo, nullptr, &resultImageView)
       != VK_SUCCESS)
-  {
-    throw std::runtime_error("Failed to create image view.");
-  }
+  { throw std::runtime_error("Failed to create image view."); }
 
   return resultImageView;
 }
@@ -1830,8 +1925,8 @@ void MVulkanRenderer::CreateTextureSampler()
   createInfo.mipmapMode       = VK_SAMPLER_MIPMAP_MODE_LINEAR;
   // Level of detail values...
   createInfo.mipLodBias       = 0.0f;
-  createInfo.minLod           = 0.0f;
-  createInfo.maxLod           = 0.0f;
+  createInfo.minLod           = static_cast<TF32>(sRequireMipLevel) / 2;
+  createInfo.maxLod           = static_cast<TF32>(sRequireMipLevel);
 
   if (vkCreateSampler(this->mGraphicsDevice, &createInfo, nullptr, &this->mTextureSampler)
       != VK_SUCCESS)
