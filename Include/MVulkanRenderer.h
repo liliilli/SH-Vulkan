@@ -152,6 +152,20 @@ private:
   /// such as 2D texure depth texture, color texture, or etc.
   void CreateSwapChainImageViews();
 
+  /// @brief We need to also specify and create VkImage, VkMem, VkImageView for depth attachment.
+  /// and created resource will be attached when creating render pass of graphics rendering.
+  ///
+  /// Created depth image should have the same resolution as the color attachment,
+  /// defined by the swap chain extent, and more options.
+  void CreateDefaultDepthResource();
+  MCR_NODISCARD VkFormat FindDepthFormat();
+  /// @brief Find most optimal supported format.
+  MCR_NODISCARD VkFormat FindSuppotedFormat(
+      const std::vector<VkFormat>& iCandidates, 
+      VkImageTiling iTiling,
+      VkFormatFeatureFlags iFeatures);
+  MCR_NODISCARD bool HasStencilCompnent(VkFormat iFormat);
+   
   /// @brief Before creating the pipeline, need to tell Vulkan about framebuffer attachments that
   /// will be used while rendering like a how many color and depth buffer there will be,
   /// and how many samples to use for each of them, how their contents should be handled.
@@ -244,7 +258,10 @@ private:
   /// @brief Create texture image view for accessing texture image.
   void CreateTextureImageView();
   /// @brief Create image view with image and given format.
-  MCR_NODISCARD VkImageView CreateImageView(VkImage iImage, VkFormat iFormat);
+  MCR_NODISCARD VkImageView CreateImageView(    
+      VkImage iImage, 
+      VkFormat iFormat, 
+      VkImageAspectFlagBits iAspectMaskFlag);
 
   /// @brief Create samplers for texture to access following special way,
   /// such as GL_REPEAT, Bilinear filtering, Anisotroic, etc...
@@ -343,7 +360,6 @@ public:
   std::vector<VkImageView> mSwapChainImageViews;
   /// @brief The attachment specified during render pass creatin are bound by wrapping them into
   /// a `VkFrameBuffer` object.
-  /// 
   /// VkFramebuffer references all of the `VkImageView` that represent attachments.
   /// Even though user use one attachment buffer, but should create same number of swap chain images.
   /// and reference them one-by-one.
@@ -386,6 +402,10 @@ public:
   static constexpr TI32     kMaxFramesInFlight = 2;
   /// @brief Defines frame index for managing vulkan semaphores.
   size_t                    mCurrentRenderFrame = 0;
+
+  VkImage         mDepthImage;
+  VkDeviceMemory  mDepthImageMemory;
+  VkImageView     mDepthImageView;
 
   VkImage         mTextureImage;
   VkDeviceMemory  mTextureImageMemory;

@@ -96,12 +96,25 @@ const std::vector<dy::DDefaultVertex> sTempVertices = {
     {{0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.f, 0.f}},
     {{0.5f, 0.5f,  0.0f}, {0.0f, 1.0f, 0.0f}, {1.f, 1.f}},
     {{-0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.f, 1.f}},
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 1.0f},{0.f, 0.f}}
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 1.0f},{0.f, 0.f}},
+    // Position,          // Color,
+    {{0.5f, -0.5f, .5f}, {1.0f, 0.0f, 0.0f}, {1.f, 0.f}},
+    {{0.5f, 0.5f,  .5f}, {0.0f, 1.0f, 0.0f}, {1.f, 1.f}},
+    {{-0.5f, 0.5f, .5f}, {0.0f, 0.0f, 1.0f}, {0.f, 1.f}},
+    {{-0.5f, -0.5f, .5f}, {1.0f, 0.0f, 1.0f},{0.f, 0.f}},
+    // Position,          // Color,
+    {{0.5f, -0.5f, -.5f}, {1.0f, 0.0f, 0.0f}, {1.f, 0.f}},
+    {{0.5f, 0.5f,  -.5f}, {0.0f, 1.0f, 0.0f}, {1.f, 1.f}},
+    {{-0.5f, 0.5f, -.5f}, {0.0f, 0.0f, 1.0f}, {0.f, 1.f}},
+    {{-0.5f, -0.5f,-.5f}, {1.0f, 0.0f, 1.0f},{0.f, 0.f}}
 };
 
 const std::vector<TU32> sTempIndices = {
-  0, 1, 2, 
-  2, 3, 0
+  0, 1, 2, 2, 3, 0
+  ,
+  4, 5, 6, 6, 7, 4
+  ,
+  8, 9,10,10,11, 8
 };
 
 VkBuffer        sVertexBufferObject;
@@ -181,9 +194,10 @@ EDySuccess MVulkanRenderer::pfInitialize()
   this->CreateRenderPass();
   this->CreateDescriptorSetLayout();
   this->CreateGraphicsPipeline();
-  this->CreateFrameBuffer();
   //
   this->CreateCommandPool();
+  this->CreateDefaultDepthResource();
+  this->CreateFrameBuffer();
   //
   this->CreateTextureImage();
   this->CreateTextureImageView();
@@ -829,9 +843,81 @@ void MVulkanRenderer::CreateSwapChainImageViews()
   {
     this->mSwapChainImageViews[imageId] = this->CreateImageView(
         this->mSwapChainImages[imageId],
-        this->mSwapChainImageFormat
+        this->mSwapChainImageFormat,
+        VK_IMAGE_ASPECT_COLOR_BIT
     );
   }
+}
+
+void MVulkanRenderer::CreateDefaultDepthResource()
+{
+  VkFormat optimalDepthFormat = this->FindDepthFormat();
+  this->CreateImage(this->mSwapChainExtent.width, this->mSwapChainExtent.height,
+    optimalDepthFormat,
+    VK_IMAGE_TILING_OPTIMAL,
+    VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+    this->mDepthImage,
+    this->mDepthImageMemory);
+
+  this->mDepthImageView = this->CreateImageView(
+      this->mDepthImage, optimalDepthFormat, VK_IMAGE_ASPECT_DEPTH_BIT);
+  
+  // We don't need staging buffer but need to be transitted to a layout that is
+  // suitable for depth attachment usage.
+  this->TransitImageLayout(this->mDepthImage, 
+      optimalDepthFormat, 
+      VK_IMAGE_LAYOUT_UNDEFINED,
+      VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+}
+
+VkFormat MVulkanRenderer::FindDepthFormat()
+{
+  return this->FindSuppotedFormat(
+    {VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D32_SFLOAT_S8_UINT},
+    // Images created with tiling equal to VK_IMAGE_TILING_LINEAR have further restrictions 
+    // on their limits and capabilities compared to images created with tiling equal 
+    // to VK_IMAGE_TILING_OPTIMAL.
+    VK_IMAGE_TILING_OPTIMAL,
+    VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+  );
+}
+
+VkFormat MVulkanRenderer::FindSuppotedFormat(
+    const std::vector<VkFormat>& iCandidates, 
+    VkImageTiling iTiling,
+    VkFormatFeatureFlags iFeatures)
+{
+  for (auto& format : iCandidates)
+  {
+    // To find optimal supported format, we need to get a properties of specific format.
+    // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkFormatProperties.html
+    // 
+    // Note that we are going to compare linear, optimal, buffer features of member variable.
+    VkFormatProperties properties;
+    vkGetPhysicalDeviceFormatProperties(this->mPhysicalDevice, format, &properties);
+  
+    if (iTiling == VK_IMAGE_TILING_LINEAR
+    &&  (properties.linearTilingFeatures & iFeatures) == iFeatures)
+    {
+      return format;
+    }
+    if (iTiling == VK_IMAGE_TILING_OPTIMAL
+    &&  (properties.optimalTilingFeatures & iFeatures) == iFeatures)
+    {
+      return format;
+    }
+  }
+
+  // If we did not find just throw exception.
+  throw std::runtime_error("Failed to find supported format.");
+}
+
+bool MVulkanRenderer::HasStencilCompnent(VkFormat iFormat)
+{
+  return iFormat == VK_FORMAT_D32_SFLOAT_S8_UINT
+      || iFormat == VK_FORMAT_D24_UNORM_S8_UINT
+      || iFormat == VK_FORMAT_D16_UNORM_S8_UINT;
 }
 
 void MVulkanRenderer::CreateRenderPass()
@@ -855,7 +941,6 @@ void MVulkanRenderer::CreateRenderPass()
   // So, `VkImage` need to be transitted to specified layouts that are suitable for the operation.
   // `initialLayout` specifies which layout the image will have before the render pass begins.
   // `finalLayout` specifies the layout to automatically transition to when the render pass finishes.
-  // 
   // VkImageLayout : https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageLayout.html
   colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   colorAttachment.finalLayout   = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
@@ -867,12 +952,26 @@ void MVulkanRenderer::CreateRenderPass()
   //
   // In this case, we only use one subpass for just rendering triangle.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkAttachmentReference.html
-  // 
   // `layout` specifies which layout we would like the attachment to have, during a subpass uses reference.
   // Vulkan will automatically transition the attachment to this layout when the subpass is started.
   VkAttachmentReference colorAttachmentRef;
   colorAttachmentRef.attachment = 0; // Index of attachment description.
   colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL; // We use attachment as color buffer.
+
+  // (1-2) Make depth-stencil attachment information.
+  VkAttachmentDescription depthAttachment = {};
+  depthAttachment.format  = this->FindDepthFormat();
+  depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+  depthAttachment.loadOp  = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  depthAttachment.stencilLoadOp   = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+  depthAttachment.stencilStoreOp  = VK_ATTACHMENT_STORE_OP_DONT_CARE; 
+  depthAttachment.initialLayout   = VK_IMAGE_LAYOUT_UNDEFINED;
+  depthAttachment.finalLayout     = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+  VkAttachmentReference depthAttachmentRef;
+  depthAttachmentRef.attachment = 1;
+  depthAttachmentRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
   // (3) The subpass also should be described.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkSubpassDescription.html
@@ -882,6 +981,7 @@ void MVulkanRenderer::CreateRenderPass()
   // layout(location = 0) out vec4 outColor
   subpassDesc.colorAttachmentCount  = 1;
   subpassDesc.pColorAttachments     = &colorAttachmentRef;
+  subpassDesc.pDepthStencilAttachment = &depthAttachmentRef;
   
   // (4) Although subpass list are consists of one, there are implicit right before and right after
   // subpass.
@@ -916,10 +1016,11 @@ void MVulkanRenderer::CreateRenderPass()
     | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
   // (5) Make Render pass handle instance.
+  std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
   VkRenderPassCreateInfo renderPassInfo = {};
   renderPassInfo.sType            = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
-  renderPassInfo.attachmentCount  = 1;
-  renderPassInfo.pAttachments     = &colorAttachment;
+  renderPassInfo.attachmentCount  = TU32(attachments.size());
+  renderPassInfo.pAttachments     = attachments.data();
   renderPassInfo.subpassCount     = 1;
   renderPassInfo.pSubpasses       = &subpassDesc;
   renderPassInfo.dependencyCount  = 1;
@@ -1188,6 +1289,14 @@ void MVulkanRenderer::CreateFixedRenderPipeline(
       throw std::runtime_error("failed to create pipeline layout!");
   }
 
+  VkPipelineDepthStencilStateCreateInfo depthStencil = {};
+  depthStencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+  depthStencil.depthTestEnable  = VK_TRUE;
+  depthStencil.depthWriteEnable = VK_TRUE;
+  depthStencil.depthCompareOp   = VK_COMPARE_OP_LESS;
+  depthStencil.depthBoundsTestEnable = VK_FALSE;
+  depthStencil.stencilTestEnable = VK_FALSE;
+
   // (10) All of these combined and create VkGraphicsPipeline.
   // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkPipelineShaderStageCreateInfo.html
   VkGraphicsPipelineCreateInfo pipelineInfo = {};
@@ -1200,7 +1309,7 @@ void MVulkanRenderer::CreateFixedRenderPipeline(
   pipelineInfo.pRasterizationState  = &rasterizerInfo;
   pipelineInfo.pMultisampleState    = &multisampling;
   pipelineInfo.pColorBlendState     = &colorBlending;
-  pipelineInfo.pDepthStencilState   = nullptr;
+  pipelineInfo.pDepthStencilState   = &depthStencil;
   pipelineInfo.pDynamicState        = nullptr;
 
   // It is also possible to use other render passes with this pipeline instead of this specific instance, 
@@ -1231,14 +1340,18 @@ void MVulkanRenderer::CreateFrameBuffer()
   // 
   for (size_t i = 0; i < this->mSwapChainImageViews.size(); ++i)
   {
-    VkImageView attachment = this->mSwapChainImageViews[i];
+    std::array<VkImageView, 2> attachments = 
+    {
+      this->mSwapChainImageViews[i],
+      this->mDepthImageView
+    };
 
     // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkFramebufferCreateInfo.html
     VkFramebufferCreateInfo frameBufferInfo = {};
     frameBufferInfo.sType           = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
     frameBufferInfo.renderPass      = this->mRenderPass;
-    frameBufferInfo.attachmentCount = 1;
-    frameBufferInfo.pAttachments    = &attachment;
+    frameBufferInfo.attachmentCount = TU32(attachments.size());
+    frameBufferInfo.pAttachments    = attachments.data();
     frameBufferInfo.width           = this->mSwapChainExtent.width;
     frameBufferInfo.height          = this->mSwapChainExtent.height;
     frameBufferInfo.layers          = 1;
@@ -1338,9 +1451,11 @@ void MVulkanRenderer::CreateCommandBuffers()
     renderPassInfo.renderArea.extent = this->mSwapChainExtent;
     // Clear color to attachment 1 of framebuffer.
     // This parameters are for VK_ATTACHMENT_LOAD_OP_CLEAR;
-    VkClearValue clearColor         = {0, 0, 0, 1};
-    renderPassInfo.clearValueCount  = 1; 
-    renderPassInfo.pClearValues     = &clearColor;
+    std::array<VkClearValue, 2> clearAttachmentValues;
+    clearAttachmentValues[0].color        = {0, 0, 0, 1};
+    clearAttachmentValues[1].depthStencil = {1.0f, 0}; 
+    renderPassInfo.clearValueCount  = TU32(clearAttachmentValues.size()); 
+    renderPassInfo.pClearValues     = clearAttachmentValues.data();
 
     // Begin a new render pass + Push commands. 
     // Upper `vkBeginCommandBuffer` is just reset command buffer and start to recording commands.
@@ -1474,7 +1589,8 @@ void MVulkanRenderer::CreateTextureImage()
 void MVulkanRenderer::CreateTextureImageView()
 {
   // That's it!
-  this->mTextureImageView = this->CreateImageView(this->mTextureImage, VK_FORMAT_R8G8B8A8_UNORM);
+  this->mTextureImageView = this->CreateImageView(
+      this->mTextureImage, VK_FORMAT_R8G8B8A8_UNORM, VK_IMAGE_ASPECT_COLOR_BIT);
 }
 
 void MVulkanRenderer::CreateImage(
@@ -1600,6 +1716,27 @@ void MVulkanRenderer::TransitImageLayout(
     sourceStages      = VK_PIPELINE_STAGE_TRANSFER_BIT;
     destinationStages = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
   }
+  else if (iOldLayout == VK_IMAGE_LAYOUT_UNDEFINED
+       &&  iNewLayout == VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+  {
+    barrier.srcAccessMask = 0;
+    // The depth buffer will be read from to perform depth tests to see if a fragment is visible, 
+    // and will be written to when a new fragment is drawn. 
+    barrier.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT 
+                          | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+    sourceStages      = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+    // The reading happens in the VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT stage 
+    // and the writing in the VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT.
+    destinationStages = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT; // We know what that stage is.
+
+    // If given format also support (has) stencil component,...
+    if (this->HasStencilCompnent(iFormat) == true)
+    {
+      barrier.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+    }
+  }
   else { throw std::invalid_argument("Unsupported layout transition."); }
 
   // All types of pipeline barriers are submitted using the same function. 
@@ -1621,7 +1758,10 @@ void MVulkanRenderer::TransitImageLayout(
   this->EndSingleTimeCommands(commandBuffer);
 }
 
-VkImageView MVulkanRenderer::CreateImageView(VkImage iImage, VkFormat iFormat)
+VkImageView MVulkanRenderer::CreateImageView(
+    VkImage iImage, 
+    VkFormat iFormat, 
+    VkImageAspectFlagBits iAspectMaskFlag)
 {
   // We also create VkImageView using VkImageViewCreateInfo and vkCreateImageView function.
   // VkImageViewCreateInfo : 
@@ -1641,7 +1781,8 @@ VkImageView MVulkanRenderer::CreateImageView(VkImage iImage, VkFormat iFormat)
   createInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY; // .a default.
   // `subresourceRange` describes what the image's purpose is
   // and which part of the image should be accessed...
-  createInfo.subresourceRange.aspectMask      = VK_IMAGE_ASPECT_COLOR_BIT;
+  // https://www.khronos.org/registry/vulkan/specs/1.1-extensions/man/html/VkImageAspectFlagBits.html
+  createInfo.subresourceRange.aspectMask      = iAspectMaskFlag;
   createInfo.subresourceRange.baseMipLevel    = 0;
   createInfo.subresourceRange.levelCount      = 1;
   createInfo.subresourceRange.baseArrayLayer  = 0;
@@ -2139,6 +2280,7 @@ void MVulkanRenderer::RecreateSwapChain()
   this->CreateSwapChainImageViews();
   this->CreateRenderPass();
   this->CreateGraphicsPipeline();
+  this->CreateDefaultDepthResource();
   this->CreateFrameBuffer();
   this->CreateCommandBuffers();
 }
@@ -2164,6 +2306,10 @@ void MVulkanRenderer::CleanupSwapChain()
   {
     vkDestroyImageView(this->mGraphicsDevice, imageView, nullptr);
   }
+
+  vkDestroyImageView(this->mGraphicsDevice, this->mDepthImageView, nullptr);
+  vkDestroyImage(this->mGraphicsDevice, this->mDepthImage, nullptr);
+  vkFreeMemory(this->mGraphicsDevice, this->mDepthImageMemory, nullptr);
 
   // Clean up code.
   vkDestroySwapchainKHR(this->mGraphicsDevice, this->mSwapChain, nullptr);
